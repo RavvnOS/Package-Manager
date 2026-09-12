@@ -1,0 +1,17 @@
+{
+  "name": "ravterm",
+  "version": "1.0.0",
+  "description": "Terminal emulator for ravynOS",
+  "checksum": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "install_paths": [
+    {
+      "source": "bin/ravterm",
+      "destination": "/usr/local/bin/ravterm"
+    },
+    {
+      "source": "share/man/man1/ravterm.1",
+      "destination": "/usr/local/share/man/man1/ravterm.1"
+    }
+  ],
+  "dependencies": []
+}

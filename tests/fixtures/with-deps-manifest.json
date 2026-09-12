@@ -1,0 +1,26 @@
+{
+  "name": "ravfetch",
+  "version": "2.1.0",
+  "description": "System information tool for ravynOS desktop",
+  "checksum": "a94a8fe5ccb19ba61c4c0873d391e987982fbbd30002b80a1c1d044673898166",
+  "install_paths": [
+    {
+      "source": "bin/ravfetch",
+      "destination": "/usr/local/bin/ravfetch"
+    },
+    {
+      "source": "Applications/RavFetch.app",
+      "destination": "/Applications/RavFetch.app"
+    }
+  ],
+  "dependencies": [
+    {
+      "name": "ravyn-base-system",
+      "constraint": ">=0.5.0"
+    },
+    {
+      "name": "libpci",
+      "constraint": ">=3.8.0"
+    }
+  ]
+}

@@ -1,0 +1,10 @@
+{
+  "description": "Incomplete package without name or checksum",
+  "version": "1.0.0",
+  "install_paths": [
+    {
+      "source": "bin/test",
+      "destination": "/usr/local/bin/test"
+    }
+  ]
+}

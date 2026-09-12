@@ -1,0 +1,22 @@
+# Binaries
+/ravpkg
+/ravpkg.exe
+bin/
+
+# Local databases and locks
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.sqlite
+
+# Test artifacts
+*.out
+*.test
+coverage.html
+
+# OS and Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

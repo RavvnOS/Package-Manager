@@ -1,0 +1,13 @@
+{
+  "name": "badpkg",
+  "version": "0.1.0",
+  "description": "Package with invalid sha256 checksum",
+  "checksum": "not-a-valid-sha256-hex-digest",
+  "install_paths": [
+    {
+      "source": "bin/badpkg",
+      "destination": "/usr/local/bin/badpkg"
+    }
+  ],
+  "dependencies": []
+}
