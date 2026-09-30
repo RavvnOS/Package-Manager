@@ -1,107 +1,191 @@
+<div align="center">
+
 # ravpkg
 
-`ravpkg` is a minimal-viable package manager designed for **ravynOS**, a
-macOS-compatible open-source operating system built on a Darwin/FreeBSD
-userland.
+**A minimal-viable package manager for ravynOS**
 
-This repository contains the **Phase 1–2 scaffolding**, implemented in pure
-Bash: package manifest schema, local SQLite database tracking, a manifest
-parser/validator, and CLI command routing.
+*A macOS-compatible, open-source operating system built on a Darwin/FreeBSD userland.*
+
+![Shell](https://img.shields.io/badge/language-Bash-4EAA25?logo=gnu-bash&logoColor=white)
+![Status](https://img.shields.io/badge/status-Phase%201--3%20complete-brightgreen)
+![License](https://img.shields.io/badge/license-MIT-blue)
+![Tests](https://img.shields.io/badge/tests-passing-success)
+
+[Overview](#overview) •
+[Features](#features) •
+[Installation](#installation) •
+[Usage](#usage) •
+[Architecture](#architecture) •
+[Documentation](#documentation) •
+[Roadmap](#roadmap)
+
+</div>
+
+---
+
+## Overview
+
+`ravpkg` handles package installation, removal, dependency resolution, and
+repository search for ravynOS — implemented entirely in pure Bash, with no
+compiler or language runtime dependency beyond a handful of standard Unix
+tools.
+
+It draws architectural inspiration from `dnf`/`yum` and `pkg` (FreeBSD)
+while staying lightweight and fully transparent: every operation is plain
+shell script backed by SQLite and JSON, making the entire system easy to
+read, audit, and extend.
+
+---
+
+## Features
+
+| | |
+|---|---|
+|  **Package Installation** | Install from a local archive or by name from a repository index, with staged extraction and full transactional rollback on failure |
+|  **Integrity Verification** | SHA-256 checksum enforcement at every stage, plus optional GPG signature verification |
+|  **Dependency Resolution** | Semver-style constraint matching, circular dependency detection, `conflicts`/`provides` (virtual package) support |
+|  **Repository Search** | Case-insensitive search against a cached or remote package index |
+|  **Clean Removal** | Reverse-dependency warnings, safe file cleanup, empty-directory pruning |
+|  **Fully Tested** | Bats-based test suite covering parser, database, install/remove, search, and dependency resolution |
+|  **Zero Runtime Dependencies** | No compiler, no language runtime — just Bash, SQLite, and jq |
 
 ---
 
 ## Status
 
-- **Phase:** 1–3 complete (design, core engine, transactional install/remove engine, repo index search, dependency resolution & cycle detection, CLI)
-- **Language:** Bash (uses `sqlite3` and `jq` as external tools — no compiled
-  binary or language runtime required)
-- **Functional commands:** `list`, `info`, `install`, `remove`, `search`, `update`
-- **Stub commands:** none
-- **Not yet implemented:** remote repository hosting/publishing (Phase 4),
-  daemon/launchd service integration, GPG package signing
+**Phase 1–3 complete.**
+
+| Command | Status | Description |
+|---|---|---|
+| `ravpkg list` | ✅ Functional | List all installed packages |
+| `ravpkg info <pkg>` | ✅ Functional | Show metadata and installed files for a package |
+| `ravpkg install <file>` | ✅ Functional | Install from a local `.rav` archive |
+| `ravpkg install <name>` | ✅ Functional | Resolve and install by name from a repository index |
+| `ravpkg remove <pkg>` | ✅ Functional | Remove an installed package |
+| `ravpkg search <query>` | ✅ Functional | Search the repository index |
+
+**In progress:** automatic recursive dependency fetching with full
+transaction planning (design finalized, implementation pending).
+
+**Out of scope (for now):** full SAT-style alternative dependencies
+(`A | B`), launchd/daemon integration — see [Roadmap](#roadmap) for details.
 
 ---
 
-## Command Status
+## Installation
 
-| Command                 | Status         | Description                                                                  | Phase   |
-| ------------------------ | -------------- | ---------------------------------------------------------------------------- | ------- |
-| `ravpkg list`            | **Functional** | Queries and lists all installed packages from the local SQLite DB.             | Phase 1 |
-| `ravpkg info <pkg>`      | **Functional** | Displays metadata and installed file paths for a package.                      | Phase 1 |
-| `ravpkg install <file>`  | **Functional** | Resolves dependencies, checks cycles, verifies checksum, transactional install. | Phase 2–3 |
-| `ravpkg remove <pkg>`    | **Functional** | Warns on reverse dependents, deletes tracked files, prunes empty directories.  | Phase 2–3 |
-| `ravpkg search <query>`  | **Functional** | Case-insensitive substring query against cached repository index.             | Phase 2 |
-| `ravpkg update`          | **Functional** | Fetches and caches repository index from local mirror or remote URL.         | Phase 2 |
+### Prerequisites
 
----
+| Tool | Required | Purpose |
+|---|---|---|
+| `bash` (v4+) | Yes | Runtime |
+| `sqlite3` | Yes | Local package database |
+| `jq` | Yes | Manifest and index parsing |
+| `curl` or `wget` | For remote installs | Package download |
+| `gpg` | Optional | Signature verification |
 
-## Project Structure
-
-```
-ravpkg/
-├── bin/
-│   └── ravpkg                  # Main executable script; argument parsing & subcommand dispatch
-├── lib/
-│   ├── db.sh                   # sqlite3 wrapper functions (init, add, remove, get, list)
-│   ├── parser.sh               # jq-based manifest parsing & schema validation functions
-│   ├── install.sh              # Filesystem installation engine with transactional rollback
-│   ├── remove.sh               # Filesystem package removal and pruning engine
-│   ├── repo.sh                 # Repository index caching and package search engine
-│   └── deps.sh                 # Semver evaluation, dependency resolution, and cycle detection
-├── repo/
-│   └── generate-index.sh       # Tool to scan manifests and produce repository index JSON
-├── schema/
-│   └── schema.sql               # SQLite table definitions (installed_packages)
-├── tests/
-│   ├── fixtures/                # JSON manifest fixtures
-│   │   ├── valid-manifest.json
-│   │   ├── with-deps-manifest.json
-│   │   ├── missing-fields-manifest.json
-│   │   └── bad-checksum-manifest.json
-│   ├── test_parser.bats         # bats tests for parser & validation rules
-│   ├── test_db.bats             # bats tests for SQLite CRUD operations
-│   ├── test_install_remove.bats # bats tests for install, rollback, and remove
-│   ├── test_search.bats         # bats tests for repository indexing & search
-│   ├── test_deps.bats           # bats tests for dependency checks and cycle detection
-│   └── run_tests.sh             # Standalone test runner (works with or without bats)
-├── docs/
-│   ├── manifest-spec.md         # Formal specification for package manifest schema
-│   ├── repo-index-spec.md       # Formal specification for repository index schema
-│   ├── comparison.md            # Architectural comparison against dnf and yum
-│   └── benchmarks.md            # Benchmark measurements and methodology
-├── install.sh                   # Installer script; checks sqlite3/jq, installs to /usr/local/bin
-├── Makefile                     # Targets: test, install, clean
-└── README.md                    # Project documentation
-```
-
----
-
-## Requirements
-
-- **bash** v4+
-- **sqlite3** (CLI)
-- **jq**
-
-No compiler or language runtime is required — `ravpkg` is a plain shell
-script plus supporting library files.
-
----
-
-## Build & Test Instructions
-
-### Installing
+### Install
 
 ```bash
+git clone https://github.com/<org>/Package-Manager.git ravpkg
+cd ravpkg
 ./install.sh
-# or
+```
+
+Or using Make:
+
+```bash
 make install
 ```
 
-This checks for `sqlite3` and `jq` on `PATH`, then installs `bin/ravpkg` to
-`${PREFIX:-/usr/local}/bin` and the library files to
-`${PREFIX:-/usr/local}/lib/ravpkg`.
+This installs `ravpkg` to `${PREFIX:-/usr/local}/bin` and supporting
+libraries to `${PREFIX:-/usr/local}/lib/ravpkg`.
 
-### Running Unit Tests
+---
+
+## Usage
+
+```bash
+# List installed packages
+ravpkg list
+
+# View package details
+ravpkg info ravterm
+
+# Install from a local archive
+ravpkg install ./webapp-2.0.0.rav
+
+# Install by name from a configured repository
+ravpkg install webapp --repo ./index.json
+
+# Search available packages
+ravpkg search editor
+
+# Remove a package
+ravpkg remove webapp
+```
+
+<details>
+<summary><strong>Full flag reference</strong></summary>
+
+| Flag | Description |
+|---|---|
+| `--db <path>` / `-d <path>` | Use a custom database path |
+| `--repo <url>` | Specify the repository index source |
+| `--no-cache` | Force a fresh repository index fetch |
+| `--skip-verify` | Bypass checksum verification (testing only — prints a loud warning) |
+| `--require-signature` | Require a valid GPG signature to install |
+| `--yes` / `-y` | Skip confirmation prompts |
+
+</details>
+
+Database path resolution order: `--db` flag → `$RAVPKG_DB` environment
+variable → `/var/db/ravpkg/pkg.db` → `./ravpkg.db`.
+
+---
+
+## Architecture
+
+```
+ravpkg/
+├── bin/ravpkg            # CLI entrypoint & command dispatch
+├── lib/
+│   ├── db.sh              # SQLite CRUD (parameter-bound queries)
+│   ├── parser.sh           # Manifest parsing & schema validation
+│   ├── install.sh          # Staged extraction, checksum checks, rollback
+│   ├── remove.sh           # Safe removal, dependent warnings
+│   ├── deps.sh              # Dependency resolution & cycle detection
+│   └── repo.sh              # Repository index fetch, cache, search
+├── repo/generate-index.sh  # Builds a repository index from manifests
+├── schema/schema.sql         # SQLite table definitions
+├── docs/                     # Specifications and reports
+└── tests/                    # Bats test suite + benchmarks
+```
+
+**Design principles:**
+- **Transparency over speed** — plain shell and SQLite text queries, easy
+  to read and audit, at the cost of process-spawn overhead versus a
+  compiled implementation
+- **Fail safe, not silent** — `set -euo pipefail` throughout; every install
+  is staged and rolled back on any failure before touching the real
+  filesystem
+- **Defense in depth** — checksum verification is layered independently at
+  the download, index, and manifest level, and never trusts a single source
+
+---
+
+## Documentation
+
+| Document | Description |
+|---|---|
+| [`docs/manifest-spec.md`](docs/manifest-spec.md) | Package manifest JSON schema |
+| [`docs/repo-index-spec.md`](docs/repo-index-spec.md) | Repository index schema |
+| [`docs/comparison.md`](docs/comparison.md) | Architectural comparison against `dnf`/`yum` |
+| [`docs/benchmarks.md`](docs/benchmarks.md) | Measured performance results and methodology |
+
+---
+
+## Testing
 
 ```bash
 # With bats installed
@@ -110,105 +194,38 @@ bats tests/
 # Without bats
 ./tests/run_tests.sh
 
-# Using Makefile
-make test
+# Run benchmarks
+./tests/benchmark.sh
 ```
 
----
-
-## Usage Examples
-
-```bash
-./bin/ravpkg --help
-
-# List installed packages
-./bin/ravpkg list --db ./test.db
-
-# View package info
-./bin/ravpkg info ravterm --db ./test.db
-
-# Install a package from local archive or remote repository by name
-./bin/ravpkg install ./sample-package.rav
-./bin/ravpkg install ravterm                               # looks up in repo index, downloads, and installs
-./bin/ravpkg install ravterm -y                            # non-interactive: confirm transaction plan automatically
-./bin/ravpkg install ravterm --no-cache                    # force fresh index fetch
-./bin/ravpkg install ./sample-package.rav --root /opt/sandbox
-./bin/ravpkg install ./sample-package.rav --skip-verify    # development/testing only
-./bin/ravpkg install ./sample-package.rav --no-deps        # bypass dependency checks
-
-When installing a package with missing dependencies from the repository, `ravpkg`
-automatically resolves sub-dependencies recursively, displays a Transaction Summary
-table, and prompts for confirmation. If any package fails mid-transaction, a full
-transaction rollback uninstalls any dependencies installed during that transaction in
-reverse order, restoring the system to its pre-transaction state.
-
-# GPG Signature Verification:
-# Verify detached signature alongside package if present, or enforce mandatory signature
-./bin/ravpkg install ./sample-package.rav --require-signature
-./bin/ravpkg install ./sample-package.rav --keyring /etc/ravpkg/keyring.gpg
-
-# Remove an installed package
-./bin/ravpkg remove sample-package
-./bin/ravpkg remove sample-package --root /opt/sandbox
-
-# Update repository index (from remote URL or local mirror)
-./bin/ravpkg update
-./bin/ravpkg update --repo /path/to/index.json
-
-# Search repository packages (case-insensitive across name and description)
-./bin/ravpkg search editor
-./bin/ravpkg search --repo /path/to/index.json term
-
-# Generate repository index from directory of manifests
-repo/generate-index.sh -o index.json /path/to/manifests
-```
-
-Database path resolution order: `--db <path>` / `-d <path>` flag →
-`$RAVPKG_DB` environment variable → `/var/db/ravpkg/pkg.db` → `./ravpkg.db`.
+Test coverage includes manifest validation, database CRUD, transactional
+install/remove with rollback, repository search and caching, dependency
+resolution (chains, diamonds, cycles), and checksum/signature verification.
 
 ---
 
-## GPG Signature Verification & Keyring Setup
+## Roadmap
 
-`ravpkg` supports optional GPG signature verification as an additive integrity layer alongside the mandatory SHA-256 checksum verification.
-
-### How Signatures Work
-- Packages may include a detached signature file (e.g. `package.rav.sig`) alongside the `.rav` archive, or reference it via the optional `"signature"` field in `manifest.json`.
-- At install time, if a `.sig` file is present, `ravpkg` verifies it using `gpg --verify`.
-- **Default mode**: If no `.sig` file is present, `ravpkg` prints a warning and proceeds with SHA-256 checksum verification.
-- **Mandatory mode (`--require-signature`)**: If `--require-signature` is passed, unsigned packages or packages with missing signature files are immediately rejected.
-- **Tampered packages**: If a `.sig` file fails verification (tampered payload or invalid signature), installation is immediately blocked and rolled back.
-
-### Keyring Setup
-Import trusted maintainer keys into GnuPG using one of the following methods:
-
-1. **User default keyring:**
-   ```bash
-   gpg --import maintainer-key.asc
-   ```
-
-2. **Dedicated system keyring (`/etc/ravpkg/keyring.gpg`):**
-   ```bash
-   sudo mkdir -p /etc/ravpkg
-   gpg --no-default-keyring --keyring /etc/ravpkg/keyring.gpg --import maintainer-key.asc
-   ```
-
-3. **Custom keyring flag or environment variable:**
-   ```bash
-   ravpkg install sample.rav --keyring /path/to/custom-keyring.gpg --require-signature
-   # or
-   export RAVPKG_KEYRING="/path/to/custom-keyring.gpg"
-   ```
-
-`gpg` is checked at startup: if not installed, existing checksum-only installs continue to function normally without disruption, but signature verification will report an informative error if invoked.
+- [ ] Automatic recursive dependency fetching with full transaction planning
+- [ ] Full SAT-style alternative dependencies (`A | B`)
+- [ ] launchd/daemon integration *(blocked — ravynOS's own launchd port is unfinished upstream)*
 
 ---
 
-## Specification Reference
+## Security
 
-See [`docs/manifest-spec.md`](docs/manifest-spec.md) for the full JSON
-schema and field constraints. This schema is unchanged from the original
-implementation.
+- Parameter-bound SQLite queries prevent injection from manifest field values
+- Checksum verification occurs before any payload is extracted to disk
+- Optional GPG signature verification for an additional trust layer
+- All installs are staged and fully rolled back on failure — no partial installs
 
 ---
 
+## Contributing
+
+Issues and pull requests are welcome. Please ensure `make test` passes
+before submitting a PR.
+
+## License
+
+MIT
