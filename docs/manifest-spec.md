@@ -28,6 +28,7 @@ A valid `manifest.json` root object contains the following fields:
 | `dependencies` | `array[object]` | No | List of prerequisite packages with version constraints. |
 | `conflicts` | `array[string]` | No | List of package identifiers or virtual names this package cannot coexist with. |
 | `provides` | `array[string]` | No | List of virtual package names or features this package satisfies (e.g. `vim` provided by `vim-gtk`). |
+| `signature` | `string` | No | Optional filename or reference to detached GPG signature file (`.sig`) expected alongside the package. |
 
 ---
 
@@ -103,6 +104,20 @@ Specifies virtual package names or abstract capabilities satisfied by this packa
 
 ---
 
+### 2.6. `signature` Field
+
+Specifies the expected filename or relative path to a detached GPG signature file (`.sig`) distributed alongside the package archive:
+
+```json
+"signature": "ravterm-1.0.0.rav.sig"
+```
+
+- **Type:** `string` (optional).
+- If omitted, `ravpkg` defaults to checking for `<package-file>.sig`.
+- When present, must be a non-empty string.
+
+---
+
 ## 3. Example Manifest (JSON)
 
 ```json
@@ -132,7 +147,8 @@ Specifies virtual package names or abstract capabilities satisfied by this packa
   ],
   "provides": [
     "terminal-emulator"
-  ]
+  ],
+  "signature": "ravterm-1.0.0.rav.sig"
 }
 ```
 
@@ -146,4 +162,5 @@ The manifest parser (`lib/parser.sh`) enforces these rules:
 3. **Empty Install Paths:** Returns an error if `install_paths` is empty or if any item has an empty `source` or `destination`.
 4. **Invalid Conflicts:** Returns an error if `conflicts` is present but is not an array of non-empty strings.
 5. **Invalid Provides:** Returns an error if `provides` is present but is not an array of non-empty strings.
-6. **Malformed Syntax:** Returns a parse error if JSON is structurally malformed.
+6. **Invalid Signature:** Returns an error if `signature` is present but is empty or not a string.
+7. **Malformed Syntax:** Returns a parse error if JSON is structurally malformed.

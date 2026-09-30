@@ -42,6 +42,13 @@ for tool in sqlite3 jq; do
     fi
 done
 
+# Check gpg availability on PATH at startup (optional capability)
+GPG_AVAILABLE=1
+if ! command -v gpg >/dev/null 2>&1; then
+    GPG_AVAILABLE=0
+fi
+export GPG_AVAILABLE
+
 # Resolve default database path
 get_default_db_path() {
     if [[ -n "${RAVPKG_DB:-}" ]]; then
@@ -95,6 +102,8 @@ Flags:
       --no-cache        Force a fresh repository index fetch before resolving
       --no-deps         Skip dependency resolution checks
       --skip-verify     Skip package checksum verification (DEVELOPMENT ONLY)
+      --require-signature Require valid GPG signature for package installation
+      --keyring string  Path to trusted GPG keyring for signature verification
   -y, --yes             Automatically answer yes to confirmation prompts
   -h, --help            help for ravpkg
 
@@ -148,6 +157,22 @@ while [[ $# -gt 0 ]]; do
             ;;
         --skip-verify)
             export RAVPKG_SKIP_VERIFY=1
+            shift
+            ;;
+        --require-signature)
+            export RAVPKG_REQUIRE_SIGNATURE=1
+            shift
+            ;;
+        --keyring)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: flag needs an argument: --keyring" >&2
+                exit 1
+            fi
+            export RAVPKG_KEYRING="$2"
+            shift 2
+            ;;
+        --keyring=*)
+            export RAVPKG_KEYRING="${1#*=}"
             shift
             ;;
         --repo)
@@ -273,7 +298,9 @@ case "$COMMAND" in
 
     install)
         clean_subargs=()
-        for sarg in "${SUBARGS[@]:-}"; do
+        i=0
+        while [[ $i -lt ${#SUBARGS[@]} ]]; do
+            sarg="${SUBARGS[$i]}"
             if [[ "$sarg" == "--skip-verify" ]]; then
                 export RAVPKG_SKIP_VERIFY=1
             elif [[ "$sarg" == "--no-deps" || "$sarg" == "--nodeps" ]]; then
@@ -282,9 +309,19 @@ case "$COMMAND" in
                 export RAVPKG_NO_CACHE=1
             elif [[ "$sarg" == "--yes" || "$sarg" == "-y" ]]; then
                 export RAVPKG_YES=1
+            elif [[ "$sarg" == "--require-signature" ]]; then
+                export RAVPKG_REQUIRE_SIGNATURE=1
+            elif [[ "$sarg" == --keyring=* ]]; then
+                export RAVPKG_KEYRING="${sarg#*=}"
+            elif [[ "$sarg" == "--keyring" ]]; then
+                i=$((i + 1))
+                if [[ $i -lt ${#SUBARGS[@]} ]]; then
+                    export RAVPKG_KEYRING="${SUBARGS[$i]}"
+                fi
             else
                 clean_subargs+=("$sarg")
             fi
+            i=$((i + 1))
         done
         if [[ ${#clean_subargs[@]} -gt 0 ]]; then
             SUBARGS=("${clean_subargs[@]}")
@@ -296,7 +333,7 @@ case "$COMMAND" in
             if [[ ${#SUBARGS[@]} -eq 0 ]]; then
                 echo "Error: accepts 1 arg(s), received 0" >&2
             fi
-            echo "Usage: ravpkg install <package-file|package-name> [-y|--yes] [--no-cache] [--skip-verify] [--no-deps]" >&2
+            echo "Usage: ravpkg install <package-file|package-name> [-y|--yes] [--no-cache] [--skip-verify] [--no-deps] [--require-signature] [--keyring <path>]" >&2
             exit 1
         fi
         TARGET_ARG="${SUBARGS[0]}"
@@ -447,22 +484,24 @@ case "$COMMAND" in
             echo "[TRANSACTION] ($((p+1))/$((deps_count+1))) Downloading dependency $dep_name ($dep_ver)..."
             if ! repo_download_package "$resolved_dep_url" "$TMP_DEP"; then
                 echo "Error: failed to download dependency '$dep_name' from '$resolved_dep_url'" >&2
-                rm -f "$TMP_DEP"
+                rm -f "$TMP_DEP" "${TMP_DEP}.sig"
                 _rollback_transaction "$dep_name"
                 exit 1
             fi
+            # Attempt to download detached signature if available
+            repo_download_package "${resolved_dep_url}.sig" "${TMP_DEP}.sig" 2>/dev/null || true
 
             if [[ "${RAVPKG_SKIP_VERIFY:-0}" != "1" ]]; then
                 if ! repo_verify_checksum "$TMP_DEP" "$dep_cs"; then
                     echo "Error: checksum mismatch between downloaded dependency '$dep_name' and index!" >&2
-                    rm -f "$TMP_DEP"
+                    rm -f "$TMP_DEP" "${TMP_DEP}.sig"
                     _rollback_transaction "$dep_name"
                     exit 1
                 fi
                 dep_manifest_cs="$(tar -xf "$TMP_DEP" -O manifest.json 2>/dev/null | jq -r '.checksum // empty' 2>/dev/null | tr -d '\r' || true)"
                 if [[ -n "$dep_manifest_cs" && -n "$dep_cs" && "$dep_manifest_cs" != "$dep_cs" ]]; then
                     echo "Error: checksum disagreement between index and manifest for dependency '$dep_name'!" >&2
-                    rm -f "$TMP_DEP"
+                    rm -f "$TMP_DEP" "${TMP_DEP}.sig"
                     _rollback_transaction "$dep_name"
                     exit 1
                 fi
@@ -470,11 +509,11 @@ case "$COMMAND" in
 
             echo "[TRANSACTION] ($((p+1))/$((deps_count+1))) Installing dependency $dep_name ($dep_ver)..."
             if ! pkg_install "$DB_PATH" "$TMP_DEP"; then
-                rm -f "$TMP_DEP"
+                rm -f "$TMP_DEP" "${TMP_DEP}.sig"
                 _rollback_transaction "$dep_name"
                 exit 1
             fi
-            rm -f "$TMP_DEP"
+            rm -f "$TMP_DEP" "${TMP_DEP}.sig"
             INSTALLED_IN_TRANSACTION+=("$dep_name")
         done
 
@@ -492,22 +531,24 @@ case "$COMMAND" in
             echo "[TRANSACTION] ($((deps_count+1))/$((deps_count+1))) Downloading target package $target_name ($target_ver)..."
             if ! repo_download_package "$resolved_target_url" "$TMP_TARGET"; then
                 echo "Error: failed to download target package '$target_name' from '$resolved_target_url'" >&2
-                rm -f "$TMP_TARGET"
+                rm -f "$TMP_TARGET" "${TMP_TARGET}.sig"
                 _rollback_transaction "$target_name"
                 exit 1
             fi
+            # Attempt to download detached signature if available
+            repo_download_package "${resolved_target_url}.sig" "${TMP_TARGET}.sig" 2>/dev/null || true
 
             if [[ "${RAVPKG_SKIP_VERIFY:-0}" != "1" ]]; then
                 if ! repo_verify_checksum "$TMP_TARGET" "$target_idx_cs"; then
                     echo "Error: checksum mismatch between downloaded target package '$target_name' and index!" >&2
-                    rm -f "$TMP_TARGET"
+                    rm -f "$TMP_TARGET" "${TMP_TARGET}.sig"
                     _rollback_transaction "$target_name"
                     exit 1
                 fi
                 target_manifest_cs="$(tar -xf "$TMP_TARGET" -O manifest.json 2>/dev/null | jq -r '.checksum // empty' 2>/dev/null | tr -d '\r' || true)"
                 if [[ -n "$target_manifest_cs" && -n "$target_idx_cs" && "$target_manifest_cs" != "$target_idx_cs" ]]; then
                     echo "Error: checksum disagreement between index and manifest for target package '$target_name'!" >&2
-                    rm -f "$TMP_TARGET"
+                    rm -f "$TMP_TARGET" "${TMP_TARGET}.sig"
                     _rollback_transaction "$target_name"
                     exit 1
                 fi
@@ -515,11 +556,11 @@ case "$COMMAND" in
 
             echo "[TRANSACTION] ($((deps_count+1))/$((deps_count+1))) Installing target package $target_name ($target_ver)..."
             if ! pkg_install "$DB_PATH" "$TMP_TARGET"; then
-                rm -f "$TMP_TARGET"
+                rm -f "$TMP_TARGET" "${TMP_TARGET}.sig"
                 _rollback_transaction "$target_name"
                 exit 1
             fi
-            rm -f "$TMP_TARGET"
+            rm -f "$TMP_TARGET" "${TMP_TARGET}.sig"
         fi
         ;;
 

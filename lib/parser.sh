@@ -84,6 +84,12 @@ validate_manifest() {
               end
             else empty end
           ][0] //
+          [ if .signature != null then
+              if ((.signature | type != "string") or ((.signature // "") | test("^\\s*$"))) then
+                "invalid signature: 'signature' must be a non-empty string"
+              else empty end
+            else empty end
+          ][0] //
           "OK"
         )
       end
@@ -147,3 +153,8 @@ manifest_get_conflicts() {
 manifest_get_provides() {
     echo "$1" | jq -c '.provides // []'
 }
+
+manifest_get_signature() {
+    echo "$1" | jq -r '.signature // empty'
+}
+

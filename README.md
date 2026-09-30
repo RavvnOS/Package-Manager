@@ -142,6 +142,11 @@ table, and prompts for confirmation. If any package fails mid-transaction, a ful
 transaction rollback uninstalls any dependencies installed during that transaction in
 reverse order, restoring the system to its pre-transaction state.
 
+# GPG Signature Verification:
+# Verify detached signature alongside package if present, or enforce mandatory signature
+./bin/ravpkg install ./sample-package.rav --require-signature
+./bin/ravpkg install ./sample-package.rav --keyring /etc/ravpkg/keyring.gpg
+
 # Remove an installed package
 ./bin/ravpkg remove sample-package
 ./bin/ravpkg remove sample-package --root /opt/sandbox
@@ -160,6 +165,42 @@ repo/generate-index.sh -o index.json /path/to/manifests
 
 Database path resolution order: `--db <path>` / `-d <path>` flag →
 `$RAVPKG_DB` environment variable → `/var/db/ravpkg/pkg.db` → `./ravpkg.db`.
+
+---
+
+## GPG Signature Verification & Keyring Setup
+
+`ravpkg` supports optional GPG signature verification as an additive integrity layer alongside the mandatory SHA-256 checksum verification.
+
+### How Signatures Work
+- Packages may include a detached signature file (e.g. `package.rav.sig`) alongside the `.rav` archive, or reference it via the optional `"signature"` field in `manifest.json`.
+- At install time, if a `.sig` file is present, `ravpkg` verifies it using `gpg --verify`.
+- **Default mode**: If no `.sig` file is present, `ravpkg` prints a warning and proceeds with SHA-256 checksum verification.
+- **Mandatory mode (`--require-signature`)**: If `--require-signature` is passed, unsigned packages or packages with missing signature files are immediately rejected.
+- **Tampered packages**: If a `.sig` file fails verification (tampered payload or invalid signature), installation is immediately blocked and rolled back.
+
+### Keyring Setup
+Import trusted maintainer keys into GnuPG using one of the following methods:
+
+1. **User default keyring:**
+   ```bash
+   gpg --import maintainer-key.asc
+   ```
+
+2. **Dedicated system keyring (`/etc/ravpkg/keyring.gpg`):**
+   ```bash
+   sudo mkdir -p /etc/ravpkg
+   gpg --no-default-keyring --keyring /etc/ravpkg/keyring.gpg --import maintainer-key.asc
+   ```
+
+3. **Custom keyring flag or environment variable:**
+   ```bash
+   ravpkg install sample.rav --keyring /path/to/custom-keyring.gpg --require-signature
+   # or
+   export RAVPKG_KEYRING="/path/to/custom-keyring.gpg"
+   ```
+
+`gpg` is checked at startup: if not installed, existing checksum-only installs continue to function normally without disruption, but signature verification will report an informative error if invoked.
 
 ---
 

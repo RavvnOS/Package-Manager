@@ -63,6 +63,9 @@ assert_ok "backward compatibility: manifest without conflicts/provides validates
 assert_ok "manifest with valid conflicts and provides validates" validate_manifest '{"name":"modern","version":"1.0.0","description":"modern","checksum":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","install_paths":[{"source":"bin/m","destination":"/usr/local/bin/m"}],"conflicts":["badpkg"],"provides":["editor","vim"]}'
 assert_fail "invalid conflicts (not an array) returns error" validate_manifest '{"name":"badconf","version":"1.0.0","description":"desc","checksum":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","install_paths":[{"source":"bin/b","destination":"/usr/local/bin/b"}],"conflicts":"not-array"}'
 assert_fail "invalid provides (empty string element) returns error" validate_manifest '{"name":"badprov","version":"1.0.0","description":"desc","checksum":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","install_paths":[{"source":"bin/b","destination":"/usr/local/bin/b"}],"provides":["valid",""]}'
+assert_ok "manifest with valid signature validates" validate_manifest '{"name":"signed","version":"1.0.0","description":"desc","checksum":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","install_paths":[{"source":"bin/s","destination":"/usr/local/bin/s"}],"signature":"signed.rav.sig"}'
+assert_fail "invalid signature (empty string) returns error" validate_manifest '{"name":"badsig","version":"1.0.0","description":"desc","checksum":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","install_paths":[{"source":"bin/s","destination":"/usr/local/bin/s"}],"signature":""}'
+
 
 echo ""
 echo "--- Database CRUD Tests ---"
@@ -1354,6 +1357,168 @@ fi
 
 rm -rf "$CP_TMP"
 rm -rf "$TR_TMP"
+
+echo ""
+echo "--- GPG Signature Verification Tests ---"
+GPG_TMP="$(mktemp -d 2>/dev/null || mktemp -d -t 'ravpkg-gpg-XXXXXX')"
+GPG_SANDBOX="$GPG_TMP/sandbox"
+GPG_DB="$GPG_TMP/test.db"
+GNUPGHOME="$GPG_TMP/gnupg"
+mkdir -p "$GPG_SANDBOX" "$GNUPGHOME"
+chmod 700 "$GNUPGHOME"
+export GNUPGHOME
+
+# Generate test GPG key in isolated GNUPGHOME
+gpg --batch --passphrase '' --quick-gen-key "RavynOS Packager <packager@ravynos.com>" default default never >/dev/null 2>&1
+
+# 1. Package with valid signature
+mkdir -p "$GPG_TMP/pkg1_build/bin"
+echo "signed-bin" > "$GPG_TMP/pkg1_build/bin/signedapp"
+PKG1_CS="$(_calc_sha256 "$GPG_TMP/pkg1_build/bin/signedapp")"
+cat <<EOF > "$GPG_TMP/pkg1_build/manifest.json"
+{
+  "name": "signedApp",
+  "version": "1.0.0",
+  "description": "Signed App",
+  "checksum": "$PKG1_CS",
+  "install_paths": [
+    { "source": "bin/signedapp", "destination": "/usr/local/bin/signedapp" }
+  ],
+  "signature": "signedApp-1.0.0.rav.sig"
+}
+EOF
+PKG1_FILE="$GPG_TMP/signedApp-1.0.0.rav"
+(cd "$GPG_TMP/pkg1_build" && tar -czf "$PKG1_FILE" manifest.json bin/signedapp)
+
+# Create detached signature
+PKG1_SIG="$GPG_TMP/signedApp-1.0.0.rav.sig"
+gpg --batch --yes --detach-sign --armor --output "$PKG1_SIG" "$PKG1_FILE" >/dev/null 2>&1
+
+# Test: valid signature passes
+assert_ok "install with valid GPG signature passes" "$ROOT_DIR/bin/ravpkg" --root "$GPG_SANDBOX" --db "$GPG_DB" install "$PKG1_FILE"
+if [[ -f "$GPG_SANDBOX/usr/local/bin/signedapp" ]]; then
+    echo "  [PASS] signed package deployed files to filesystem"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] signed package failed to deploy files"
+    FAILED=$((FAILED + 1))
+fi
+
+# 2. Package with invalid/tampered signature rejected
+mkdir -p "$GPG_TMP/pkg2_build/bin"
+echo "tampered-bin" > "$GPG_TMP/pkg2_build/bin/badapp"
+PKG2_CS="$(_calc_sha256 "$GPG_TMP/pkg2_build/bin/badapp")"
+cat <<EOF > "$GPG_TMP/pkg2_build/manifest.json"
+{
+  "name": "badSigApp",
+  "version": "1.0.0",
+  "description": "Bad Signature App",
+  "checksum": "$PKG2_CS",
+  "install_paths": [
+    { "source": "bin/badapp", "destination": "/usr/local/bin/badapp" }
+  ]
+}
+EOF
+PKG2_FILE="$GPG_TMP/badSigApp-1.0.0.rav"
+(cd "$GPG_TMP/pkg2_build" && tar -czf "$PKG2_FILE" manifest.json bin/badapp)
+
+# Sign a different string so signature is invalid for PKG2_FILE
+PKG2_SIG="$GPG_TMP/badSigApp-1.0.0.rav.sig"
+echo "different content" | gpg --batch --yes --detach-sign --armor --output "$PKG2_SIG" - >/dev/null 2>&1
+
+assert_fail "install with invalid/tampered signature rejected" "$ROOT_DIR/bin/ravpkg" --root "$GPG_SANDBOX" --db "$GPG_DB" install "$PKG2_FILE"
+if [[ ! -f "$GPG_SANDBOX/usr/local/bin/badapp" ]]; then
+    echo "  [PASS] tampered signature package wrote nothing to filesystem"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] tampered signature package wrote files to filesystem"
+    FAILED=$((FAILED + 1))
+fi
+
+# 3. Missing signature warns but proceeds without --require-signature
+mkdir -p "$GPG_TMP/pkg3_build/bin"
+echo "unsigned-bin" > "$GPG_TMP/pkg3_build/bin/unsignedapp"
+PKG3_CS="$(_calc_sha256 "$GPG_TMP/pkg3_build/bin/unsignedapp")"
+cat <<EOF > "$GPG_TMP/pkg3_build/manifest.json"
+{
+  "name": "unsignedApp",
+  "version": "1.0.0",
+  "description": "Unsigned App",
+  "checksum": "$PKG3_CS",
+  "install_paths": [
+    { "source": "bin/unsignedapp", "destination": "/usr/local/bin/unsignedapp" }
+  ]
+}
+EOF
+PKG3_FILE="$GPG_TMP/unsignedApp-1.0.0.rav"
+(cd "$GPG_TMP/pkg3_build" && tar -czf "$PKG3_FILE" manifest.json bin/unsignedapp)
+
+assert_ok "missing signature warns but proceeds without --require-signature" "$ROOT_DIR/bin/ravpkg" --root "$GPG_SANDBOX" --db "$GPG_DB" install "$PKG3_FILE"
+if [[ -f "$GPG_SANDBOX/usr/local/bin/unsignedapp" ]]; then
+    echo "  [PASS] unsigned package deployed to filesystem"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] unsigned package failed to deploy"
+    FAILED=$((FAILED + 1))
+fi
+
+# 4. Missing signature blocks with --require-signature
+mkdir -p "$GPG_TMP/pkg4_build/bin"
+echo "blocked-bin" > "$GPG_TMP/pkg4_build/bin/blockedapp"
+PKG4_CS="$(_calc_sha256 "$GPG_TMP/pkg4_build/bin/blockedapp")"
+cat <<EOF > "$GPG_TMP/pkg4_build/manifest.json"
+{
+  "name": "blockedApp",
+  "version": "1.0.0",
+  "description": "Blocked Unsigned App",
+  "checksum": "$PKG4_CS",
+  "install_paths": [
+    { "source": "bin/blockedapp", "destination": "/usr/local/bin/blockedapp" }
+  ]
+}
+EOF
+PKG4_FILE="$GPG_TMP/blockedApp-1.0.0.rav"
+(cd "$GPG_TMP/pkg4_build" && tar -czf "$PKG4_FILE" manifest.json bin/blockedapp)
+
+assert_fail "missing signature blocks with --require-signature" "$ROOT_DIR/bin/ravpkg" --root "$GPG_SANDBOX" --db "$GPG_DB" --require-signature install "$PKG4_FILE"
+if [[ ! -f "$GPG_SANDBOX/usr/local/bin/blockedapp" ]]; then
+    echo "  [PASS] rejected unsigned package wrote nothing to filesystem"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] rejected unsigned package wrote files to filesystem"
+    FAILED=$((FAILED + 1))
+fi
+
+# 5. Valid signature passes with --require-signature
+mkdir -p "$GPG_TMP/pkg5_build/bin"
+echo "valid-req-bin" > "$GPG_TMP/pkg5_build/bin/reqsignedapp"
+PKG5_CS="$(_calc_sha256 "$GPG_TMP/pkg5_build/bin/reqsignedapp")"
+cat <<EOF > "$GPG_TMP/pkg5_build/manifest.json"
+{
+  "name": "reqSignedApp",
+  "version": "1.0.0",
+  "description": "Required Signed App",
+  "checksum": "$PKG5_CS",
+  "install_paths": [
+    { "source": "bin/reqsignedapp", "destination": "/usr/local/bin/reqsignedapp" }
+  ]
+}
+EOF
+PKG5_FILE="$GPG_TMP/reqSignedApp-1.0.0.rav"
+(cd "$GPG_TMP/pkg5_build" && tar -czf "$PKG5_FILE" manifest.json bin/reqsignedapp)
+gpg --batch --yes --detach-sign --armor --output "${PKG5_FILE}.sig" "$PKG5_FILE" >/dev/null 2>&1
+
+assert_ok "valid signature passes with --require-signature" "$ROOT_DIR/bin/ravpkg" --root "$GPG_SANDBOX" --db "$GPG_DB" --require-signature install "$PKG5_FILE"
+if [[ -f "$GPG_SANDBOX/usr/local/bin/reqsignedapp" ]]; then
+    echo "  [PASS] required signature package successfully deployed"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] required signature package failed to deploy"
+    FAILED=$((FAILED + 1))
+fi
+
+rm -rf "$GPG_TMP"
+unset GNUPGHOME
 
 echo ""
 echo "================================================================="

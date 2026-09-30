@@ -115,3 +115,19 @@ setup() {
     [[ "$output" =~ "provides" ]]
 }
 
+@test "parser: manifest with valid signature field validates" {
+    json='{"name":"signed","version":"1.0.0","description":"desc","checksum":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","install_paths":[{"source":"bin/s","destination":"/usr/local/bin/s"}],"signature":"signed.rav.sig"}'
+    run validate_manifest "$json"
+    [ "$status" -eq 0 ]
+    sig="$(manifest_get_signature "$json")"
+    [ "$sig" = "signed.rav.sig" ]
+}
+
+@test "parser: invalid signature (empty string) returns error" {
+    json='{"name":"badsig","version":"1.0.0","description":"desc","checksum":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","install_paths":[{"source":"bin/s","destination":"/usr/local/bin/s"}],"signature":""}'
+    run validate_manifest "$json"
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "signature" ]]
+}
+
+

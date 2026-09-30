@@ -69,6 +69,83 @@ _install_rollback() {
     fi
 }
 
+# Optional GPG signature verification
+# Checks for detached signature matching manifest "signature" or <package_file>.sig
+_verify_gpg_signature() {
+    local package_file="$1"
+    local manifest_json="$2"
+    local root_prefix="${3:-}"
+
+    local pkg_name
+    pkg_name="$(manifest_get_name "$manifest_json" | tr -d '\r')"
+
+    local manifest_sig
+    manifest_sig="$(echo "$manifest_json" | jq -r '.signature // empty' 2>/dev/null | tr -d '\r' || true)"
+
+    local sig_file=""
+    if [[ -n "$manifest_sig" ]]; then
+        if [[ "$manifest_sig" == /* ]]; then
+            sig_file="$manifest_sig"
+        else
+            sig_file="$(dirname "$package_file")/$manifest_sig"
+        fi
+    fi
+
+    # Fallback to <package_file>.sig if no explicit signature or if specified file was not found
+    if [[ -z "$sig_file" || ! -f "$sig_file" ]]; then
+        if [[ -f "${package_file}.sig" ]]; then
+            sig_file="${package_file}.sig"
+        fi
+    fi
+
+    local require_sig="${RAVPKG_REQUIRE_SIGNATURE:-0}"
+
+    if [[ -z "$sig_file" || ! -f "$sig_file" ]]; then
+        if [[ "$require_sig" == "1" ]]; then
+            echo "Error: GPG signature verification is mandatory (--require-signature), but no signature file (.sig) was found for '$package_file'!" >&2
+            return 1
+        else
+            echo "[WARNING] Package '$pkg_name' is unsigned (no detached .sig file found). Continuing with SHA-256 checksum verification only." >&2
+            return 0
+        fi
+    fi
+
+    # Signature file is present: verify gpg is available on PATH
+    if [[ "${GPG_AVAILABLE:-1}" != "1" ]] && ! command -v gpg >/dev/null 2>&1; then
+        echo "Error: 'gpg' command is required for signature verification, but was not found in PATH." >&2
+        return 1
+    fi
+
+    local -a gpg_args=(--batch --quiet)
+
+    local keyring="${RAVPKG_KEYRING:-}"
+    if [[ -z "$keyring" && -n "$root_prefix" && -f "${root_prefix%/}/etc/ravpkg/keyring.gpg" ]]; then
+        keyring="${root_prefix%/}/etc/ravpkg/keyring.gpg"
+    elif [[ -z "$keyring" && -f "/etc/ravpkg/keyring.gpg" ]]; then
+        keyring="/etc/ravpkg/keyring.gpg"
+    fi
+
+    if [[ -n "$keyring" ]]; then
+        if [[ ! -f "$keyring" ]]; then
+            echo "Error: specified GPG keyring file does not exist: $keyring" >&2
+            return 1
+        fi
+        gpg_args+=(--no-default-keyring --keyring "$keyring")
+    fi
+
+    if [[ -n "${RAVPKG_GPG_HOMEDIR:-}" ]]; then
+        gpg_args+=(--homedir "$RAVPKG_GPG_HOMEDIR")
+    fi
+
+    if ! gpg "${gpg_args[@]}" --verify "$sig_file" "$package_file" 2>&1; then
+        echo "Error: GPG signature verification failed for package '$pkg_name' ($package_file) using signature '$sig_file'!" >&2
+        return 1
+    fi
+
+    echo "[INSTALL] GPG signature verified successfully: $sig_file"
+    return 0
+}
+
 pkg_install() {
     local db_path="$1"
     local package_file="$2"
@@ -178,6 +255,13 @@ pkg_install() {
         fi
 
         echo "[INSTALL] Checksum verified: $expected_checksum"
+    fi
+
+    # 4.5. Optional GPG signature verification enforcement (BEFORE extracting payload files)
+    if ! _verify_gpg_signature "$package_file" "$manifest_json" "$root_prefix"; then
+        rm -rf "$STAGE_DIR"
+        trap - ERR
+        return 1
     fi
 
     # 5. Extract package payload into staging directory only AFTER checksum is verified
