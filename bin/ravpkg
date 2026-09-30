@@ -31,6 +31,8 @@ source "$LIB_DIR/install.sh"
 source "$LIB_DIR/remove.sh"
 # shellcheck source=lib/repo.sh
 source "$LIB_DIR/repo.sh"
+# shellcheck source=lib/deps.sh
+source "$LIB_DIR/deps.sh"
 
 # Pre-flight check: verify dependencies
 for tool in sqlite3 jq; do
@@ -90,6 +92,7 @@ Flags:
   -r, --root string     Target root directory for installation (default: /)
       --repo string     Repository URL or local path to index.json
       --cache string    Path to repository index cache file
+      --no-deps         Skip dependency resolution checks
   -h, --help            help for ravpkg
 
 Use "ravpkg [command] --help" for more information about a command.
@@ -126,6 +129,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --root=*)
             export RAVPKG_ROOT="${1#*=}"
+            shift
+            ;;
+        --no-deps|--nodeps)
+            export RAVPKG_NO_DEPS=1
             shift
             ;;
         --repo)

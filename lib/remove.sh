@@ -2,6 +2,14 @@
 # lib/remove.sh - Filesystem package uninstallation engine
 set -euo pipefail
 
+if ! declare -f check_package_dependents_warning >/dev/null 2>&1; then
+    _DEPS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -f "$_DEPS_LIB_DIR/deps.sh" ]]; then
+        # shellcheck source=lib/deps.sh
+        source "$_DEPS_LIB_DIR/deps.sh"
+    fi
+fi
+
 pkg_remove() {
     local db_path="$1"
     local package_name="$2"
@@ -20,6 +28,9 @@ pkg_remove() {
     files_raw="$(echo "$pkg_json" | jq -r '.installed_files' | tr -d '\r')"
 
     echo "[REMOVE] Removing package: $package_name ($version)..."
+
+    # 1.5 Check for installed packages that depend on this package (warn, do not block)
+    check_package_dependents_warning "$package_name" "$db_path" "$root_prefix"
 
     # 2. Parse installed files list
     local -a files_to_remove=()

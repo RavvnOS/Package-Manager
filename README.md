@@ -12,13 +12,13 @@ parser/validator, and CLI command routing.
 
 ## Status
 
-- **Phase:** 1–2 complete (design, core engine, transactional install/remove engine, repo index search, CLI)
+- **Phase:** 1–3 complete (design, core engine, transactional install/remove engine, repo index search, dependency resolution & cycle detection, CLI)
 - **Language:** Bash (uses `sqlite3` and `jq` as external tools — no compiled
   binary or language runtime required)
 - **Functional commands:** `list`, `info`, `install`, `remove`, `search`, `update`
 - **Stub commands:** none
-- **Not yet implemented:** dependency resolution (Phase 3), remote repository
-  hosting/publishing (Phase 4), daemon/launchd integration, GPG signing
+- **Not yet implemented:** remote repository hosting/publishing (Phase 4),
+  daemon/launchd service integration, GPG package signing
 
 ---
 
@@ -28,13 +28,10 @@ parser/validator, and CLI command routing.
 | ------------------------ | -------------- | ---------------------------------------------------------------------------- | ------- |
 | `ravpkg list`            | **Functional** | Queries and lists all installed packages from the local SQLite DB.             | Phase 1 |
 | `ravpkg info <pkg>`      | **Functional** | Displays metadata and installed file paths for a package.                      | Phase 1 |
-| `ravpkg install <file>`  | **Functional** | Validates checksum, stages unpack, copies files, with transactional rollback. | Phase 2 |
-| `ravpkg remove <pkg>`    | **Functional** | Deletes tracked files and manifest, prunes directories, cleans DB record.     | Phase 2 |
+| `ravpkg install <file>`  | **Functional** | Resolves dependencies, checks cycles, verifies checksum, transactional install. | Phase 2–3 |
+| `ravpkg remove <pkg>`    | **Functional** | Warns on reverse dependents, deletes tracked files, prunes empty directories.  | Phase 2–3 |
 | `ravpkg search <query>`  | **Functional** | Case-insensitive substring query against cached repository index.             | Phase 2 |
 | `ravpkg update`          | **Functional** | Fetches and caches repository index from local mirror or remote URL.         | Phase 2 |
-
-> Dependency resolution and launchd/daemon service integration are deferred
-> to subsequent phases.
 
 ---
 
@@ -49,7 +46,8 @@ ravpkg/
 │   ├── parser.sh               # jq-based manifest parsing & schema validation functions
 │   ├── install.sh              # Filesystem installation engine with transactional rollback
 │   ├── remove.sh               # Filesystem package removal and pruning engine
-│   └── repo.sh                 # Repository index caching and package search engine
+│   ├── repo.sh                 # Repository index caching and package search engine
+│   └── deps.sh                 # Semver evaluation, dependency resolution, and cycle detection
 ├── repo/
 │   └── generate-index.sh       # Tool to scan manifests and produce repository index JSON
 ├── schema/
@@ -64,6 +62,7 @@ ravpkg/
 │   ├── test_db.bats             # bats tests for SQLite CRUD operations
 │   ├── test_install_remove.bats # bats tests for install, rollback, and remove
 │   ├── test_search.bats         # bats tests for repository indexing & search
+│   ├── test_deps.bats           # bats tests for dependency checks and cycle detection
 │   └── run_tests.sh             # Standalone test runner (works with or without bats)
 ├── docs/
 │   ├── manifest-spec.md         # Formal specification for package manifest schema
@@ -128,9 +127,10 @@ make test
 # View package info
 ./bin/ravpkg info ravterm --db ./test.db
 
-# Install a package archive (with optional --root sandbox)
+# Install a package archive (resolves dependencies, optional --root sandbox or --no-deps)
 ./bin/ravpkg install ./sample-package.rav
 ./bin/ravpkg install ./sample-package.rav --root /opt/sandbox
+./bin/ravpkg install ./sample-package.rav --no-deps
 
 # Remove an installed package
 ./bin/ravpkg remove sample-package

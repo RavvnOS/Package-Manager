@@ -27,8 +27,9 @@ cp lib/parser.sh "$LIB_DIR/parser.sh"
 cp lib/install.sh "$LIB_DIR/install.sh"
 cp lib/remove.sh "$LIB_DIR/remove.sh"
 cp lib/repo.sh "$LIB_DIR/repo.sh"
+cp lib/deps.sh "$LIB_DIR/deps.sh"
 cp schema/schema.sql "$LIB_DIR/schema.sql"
-chmod 644 "$LIB_DIR/db.sh" "$LIB_DIR/parser.sh" "$LIB_DIR/install.sh" "$LIB_DIR/remove.sh" "$LIB_DIR/repo.sh" "$LIB_DIR/schema.sql"
+chmod 644 "$LIB_DIR/db.sh" "$LIB_DIR/parser.sh" "$LIB_DIR/install.sh" "$LIB_DIR/remove.sh" "$LIB_DIR/repo.sh" "$LIB_DIR/deps.sh" "$LIB_DIR/schema.sql"
 
 # Copy main binary executables
 cp bin/ravpkg "$BIN_DIR/ravpkg"

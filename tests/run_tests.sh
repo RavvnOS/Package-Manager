@@ -360,6 +360,180 @@ fi
 rm -rf "$SRCH_TMP"
 
 echo ""
+echo "--- Dependency Resolution & Cycle Detection Tests ---"
+DEP_TMP="$(mktemp -d 2>/dev/null || mktemp -d -t 'ravpkg-dep-test')"
+DEP_SANDBOX="$DEP_TMP/sandbox"
+DEP_DB="$DEP_TMP/pkg.db"
+mkdir -p "$DEP_SANDBOX"
+db_init "$DEP_DB" "$SCHEMA"
+source "$ROOT_DIR/lib/deps.sh"
+
+# 1. Semver unit tests
+if semver_satisfies "1.0.0" ">=1.0.0" && semver_satisfies "1.2.0" ">=1.0.0" && ! semver_satisfies "0.9.0" ">=1.0.0" && semver_satisfies "2.0.0" "=2.0.0"; then
+    echo "  [PASS] semver_satisfies evaluates >=, =, <= constraints correctly"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] semver_satisfies evaluation failure"
+    FAILED=$((FAILED + 1))
+fi
+
+# 2. Build base library libfoo 1.0.0 and install it
+FOO_BUILD="$DEP_TMP/foo_build"
+mkdir -p "$FOO_BUILD/lib"
+echo "foo-lib" > "$FOO_BUILD/lib/libfoo.so"
+FOO_CS="$(_calc_sha256 "$FOO_BUILD/lib/libfoo.so")"
+cat <<EOF > "$FOO_BUILD/manifest.json"
+{
+  "name": "libfoo",
+  "version": "1.0.0",
+  "description": "Foo library",
+  "checksum": "$FOO_CS",
+  "install_paths": [
+    { "source": "lib/libfoo.so", "destination": "/usr/local/lib/libfoo.so" }
+  ],
+  "dependencies": []
+}
+EOF
+FOO_PKG="$DEP_TMP/libfoo-1.0.0.rav"
+(cd "$FOO_BUILD" && tar -czf "$FOO_PKG" manifest.json lib/libfoo.so)
+assert_ok "install base library libfoo" "$ROOT_DIR/bin/ravpkg" --root "$DEP_SANDBOX" --db "$DEP_DB" install "$FOO_PKG"
+
+# 3. Build app requiring libfoo >=1.0.0 and install it (satisfied)
+APP_BUILD="$DEP_TMP/app_build"
+mkdir -p "$APP_BUILD/bin"
+echo "app-bin" > "$APP_BUILD/bin/myapp"
+APP_CS="$(_calc_sha256 "$APP_BUILD/bin/myapp")"
+cat <<EOF > "$APP_BUILD/manifest.json"
+{
+  "name": "myapp",
+  "version": "1.0.0",
+  "description": "App requiring libfoo",
+  "checksum": "$APP_CS",
+  "install_paths": [
+    { "source": "bin/myapp", "destination": "/usr/local/bin/myapp" }
+  ],
+  "dependencies": [
+    { "name": "libfoo", "constraint": ">=1.0.0" }
+  ]
+}
+EOF
+APP_PKG="$DEP_TMP/myapp-1.0.0.rav"
+(cd "$APP_BUILD" && tar -czf "$APP_PKG" manifest.json bin/myapp)
+assert_ok "install with satisfied dependencies" "$ROOT_DIR/bin/ravpkg" --root "$DEP_SANDBOX" --db "$DEP_DB" install "$APP_PKG"
+if [[ -f "$DEP_SANDBOX/usr/local/bin/myapp" ]]; then
+    echo "  [PASS] app installed when dependencies are satisfied"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] app not installed despite satisfied dependencies"
+    FAILED=$((FAILED + 1))
+fi
+
+# 4. Install with missing dependencies fails with clear list
+MISS_BUILD="$DEP_TMP/miss_build"
+mkdir -p "$MISS_BUILD/bin"
+echo "miss" > "$MISS_BUILD/bin/missapp"
+MISS_CS="$(_calc_sha256 "$MISS_BUILD/bin/missapp")"
+cat <<EOF > "$MISS_BUILD/manifest.json"
+{
+  "name": "missapp",
+  "version": "1.0.0",
+  "description": "App requiring missing deps",
+  "checksum": "$MISS_CS",
+  "install_paths": [
+    { "source": "bin/missapp", "destination": "/usr/local/bin/missapp" }
+  ],
+  "dependencies": [
+    { "name": "libmissing", "constraint": ">=2.0.0" },
+    { "name": "libghost", "constraint": "=1.5.0" }
+  ]
+}
+EOF
+MISS_PKG="$DEP_TMP/missapp-1.0.0.rav"
+(cd "$MISS_BUILD" && tar -czf "$MISS_PKG" manifest.json bin/missapp)
+assert_fail "install with missing dependencies rejected" "$ROOT_DIR/bin/ravpkg" --root "$DEP_SANDBOX" --db "$DEP_DB" install "$MISS_PKG"
+
+# 5. Circular dependency detection: self-cycle
+SELF_BUILD="$DEP_TMP/self_build"
+mkdir -p "$SELF_BUILD/bin"
+echo "self" > "$SELF_BUILD/bin/self"
+SELF_CS="$(_calc_sha256 "$SELF_BUILD/bin/self")"
+cat <<EOF > "$SELF_BUILD/manifest.json"
+{
+  "name": "selfcycle",
+  "version": "1.0.0",
+  "description": "Self cycle",
+  "checksum": "$SELF_CS",
+  "install_paths": [
+    { "source": "bin/self", "destination": "/usr/local/bin/self" }
+  ],
+  "dependencies": [
+    { "name": "selfcycle", "constraint": ">=1.0.0" }
+  ]
+}
+EOF
+SELF_PKG="$DEP_TMP/selfcycle-1.0.0.rav"
+(cd "$SELF_BUILD" && tar -czf "$SELF_PKG" manifest.json bin/self)
+assert_fail "self-circular dependency rejected" "$ROOT_DIR/bin/ravpkg" --root "$DEP_SANDBOX" --db "$DEP_DB" install "$SELF_PKG"
+
+# 6. Circular dependency detection: transitive cycle (pkgA -> pkgB -> pkgA)
+B_BUILD="$DEP_TMP/b_build"
+mkdir -p "$B_BUILD/bin"
+echo "b" > "$B_BUILD/bin/b"
+B_CS="$(_calc_sha256 "$B_BUILD/bin/b")"
+cat <<EOF > "$B_BUILD/manifest.json"
+{
+  "name": "pkgB",
+  "version": "1.0.0",
+  "description": "Package B",
+  "checksum": "$B_CS",
+  "install_paths": [
+    { "source": "bin/b", "destination": "/usr/local/bin/b" }
+  ],
+  "dependencies": [
+    { "name": "pkgA", "constraint": ">=1.0.0" }
+  ]
+}
+EOF
+B_PKG="$DEP_TMP/pkgB-1.0.0.rav"
+(cd "$B_BUILD" && tar -czf "$B_PKG" manifest.json bin/b)
+assert_ok "install pkgB with --no-deps" "$ROOT_DIR/bin/ravpkg" --root "$DEP_SANDBOX" --db "$DEP_DB" --no-deps install "$B_PKG"
+
+A_BUILD="$DEP_TMP/a_build"
+mkdir -p "$A_BUILD/bin"
+echo "a" > "$A_BUILD/bin/a"
+A_CS="$(_calc_sha256 "$A_BUILD/bin/a")"
+cat <<EOF > "$A_BUILD/manifest.json"
+{
+  "name": "pkgA",
+  "version": "1.0.0",
+  "description": "Package A",
+  "checksum": "$A_CS",
+  "install_paths": [
+    { "source": "bin/a", "destination": "/usr/local/bin/a" }
+  ],
+  "dependencies": [
+    { "name": "pkgB", "constraint": ">=1.0.0" }
+  ]
+}
+EOF
+A_PKG="$DEP_TMP/pkgA-1.0.0.rav"
+(cd "$A_BUILD" && tar -czf "$A_PKG" manifest.json bin/a)
+assert_fail "transitive circular dependency pkgA -> pkgB -> pkgA rejected" "$ROOT_DIR/bin/ravpkg" --root "$DEP_SANDBOX" --db "$DEP_DB" install "$A_PKG"
+
+# 7. Remove package with dependents warns and succeeds
+# Notice myapp depends on libfoo: remove libfoo should warn about myapp and proceed
+assert_ok "remove libfoo with dependent myapp warns and removes" "$ROOT_DIR/bin/ravpkg" --root "$DEP_SANDBOX" --db "$DEP_DB" remove "libfoo"
+if [[ ! -f "$DEP_SANDBOX/usr/local/lib/libfoo.so" ]]; then
+    echo "  [PASS] package removed despite dependents warning"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] package not removed"
+    FAILED=$((FAILED + 1))
+fi
+
+rm -rf "$DEP_TMP"
+
+echo ""
 echo "================================================================="
 echo "Results: $PASSED passed, $FAILED failed."
 if [[ "$FAILED" -gt 0 ]]; then

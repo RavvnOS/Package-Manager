@@ -2,6 +2,14 @@
 # lib/install.sh - Filesystem installation engine with transactional rollback
 set -euo pipefail
 
+if ! declare -f check_package_dependencies >/dev/null 2>&1; then
+    _DEPS_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -f "$_DEPS_LIB_DIR/deps.sh" ]]; then
+        # shellcheck source=lib/deps.sh
+        source "$_DEPS_LIB_DIR/deps.sh"
+    fi
+fi
+
 _calc_sha256() {
     if command -v sha256sum >/dev/null 2>&1; then
         sha256sum "$@" | awk '{print $1}'
@@ -117,6 +125,15 @@ pkg_install() {
         rm -rf "$STAGE_DIR"
         trap - ERR
         return 1
+    fi
+
+    # 3.5 Check package dependencies (unless --no-deps is passed)
+    if [[ "${RAVPKG_NO_DEPS:-0}" != "1" ]]; then
+        if ! check_package_dependencies "$manifest_json" "$db_path" "$root_prefix"; then
+            rm -rf "$STAGE_DIR"
+            trap - ERR
+            return 1
+        fi
     fi
 
     # 4. Verify checksum before extracting files to target filesystem
