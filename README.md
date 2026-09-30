@@ -127,9 +127,10 @@ make test
 # View package info
 ./bin/ravpkg info ravterm --db ./test.db
 
-# Install a package archive (resolves dependencies, optional --root sandbox or --no-deps)
+# Install a package archive (verifies checksum, resolves dependencies, optional --root sandbox, --skip-verify, or --no-deps)
 ./bin/ravpkg install ./sample-package.rav
 ./bin/ravpkg install ./sample-package.rav --root /opt/sandbox
+./bin/ravpkg install ./sample-package.rav --skip-verify    # development/testing only
 ./bin/ravpkg install ./sample-package.rav --no-deps
 
 # Remove an installed package

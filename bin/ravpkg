@@ -93,6 +93,7 @@ Flags:
       --repo string     Repository URL or local path to index.json
       --cache string    Path to repository index cache file
       --no-deps         Skip dependency resolution checks
+      --skip-verify     Skip package checksum verification (DEVELOPMENT ONLY)
   -h, --help            help for ravpkg
 
 Use "ravpkg [command] --help" for more information about a command.
@@ -133,6 +134,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-deps|--nodeps)
             export RAVPKG_NO_DEPS=1
+            shift
+            ;;
+        --skip-verify)
+            export RAVPKG_SKIP_VERIFY=1
             shift
             ;;
         --repo)
@@ -257,11 +262,27 @@ case "$COMMAND" in
         ;;
 
     install)
+        clean_subargs=()
+        for sarg in "${SUBARGS[@]:-}"; do
+            if [[ "$sarg" == "--skip-verify" ]]; then
+                export RAVPKG_SKIP_VERIFY=1
+            elif [[ "$sarg" == "--no-deps" || "$sarg" == "--nodeps" ]]; then
+                export RAVPKG_NO_DEPS=1
+            else
+                clean_subargs+=("$sarg")
+            fi
+        done
+        if [[ ${#clean_subargs[@]} -gt 0 ]]; then
+            SUBARGS=("${clean_subargs[@]}")
+        else
+            SUBARGS=()
+        fi
+
         if [[ ${#SUBARGS[@]} -eq 0 || "${SUBARGS[0]}" == "-h" || "${SUBARGS[0]}" == "--help" ]]; then
             if [[ ${#SUBARGS[@]} -eq 0 ]]; then
                 echo "Error: accepts 1 arg(s), received 0" >&2
             fi
-            echo "Usage: ravpkg install <package-file>" >&2
+            echo "Usage: ravpkg install <package-file> [--skip-verify] [--no-deps]" >&2
             exit 1
         fi
         PKG_FILE="${SUBARGS[0]}"

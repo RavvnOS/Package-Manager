@@ -100,6 +100,38 @@ JSON
     [ "$status" -ne 0 ]
 }
 
+@test "install: --skip-verify bypasses checksum check with warning logged" {
+    BAD_PKG="$TEST_TMP/bad-checksum-bypass.rav"
+    BAD_DIR="$TEST_TMP/bad_bypass_build"
+    mkdir -p "$BAD_DIR/bin"
+    echo "bypass" > "$BAD_DIR/bin/bypass_bin"
+    cat <<JSON > "$BAD_DIR/manifest.json"
+{
+  "name": "bypass-tool",
+  "version": "1.0.0",
+  "description": "Bypass checksum tool",
+  "checksum": "0000000000000000000000000000000000000000000000000000000000000000",
+  "install_paths": [
+    { "source": "bin/bypass_bin", "destination": "/usr/local/bin/bypass_bin" }
+  ]
+}
+JSON
+    (cd "$BAD_DIR" && tar -czf "$BAD_PKG" manifest.json bin/bypass_bin)
+
+    export RAVPKG_ROOT="$SANDBOX"
+    run "$ROOT_DIR/bin/ravpkg" --root "$SANDBOX" --db "$TEST_DB" install --skip-verify "$BAD_PKG"
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "WARNING: --skip-verify is enabled! Checksum verification is BYPASSED." ]]
+    [[ "$output" =~ "Successfully installed: bypass-tool 1.0.0" ]]
+
+    # Verify file was placed on filesystem
+    [ -f "$SANDBOX/usr/local/bin/bypass_bin" ]
+
+    # Verify DB record was created
+    run db_get_package "$TEST_DB" "bypass-tool"
+    [ "$status" -eq 0 ]
+}
+
 @test "install: reject when already installed" {
     export RAVPKG_ROOT="$SANDBOX"
     # First install

@@ -136,44 +136,50 @@ pkg_install() {
         fi
     fi
 
-    # 4. Verify checksum before extracting files to target filesystem
-    # Extract package payload into staging directory
+    # 4. Checksum verification enforcement (BEFORE extracting payload files)
+    local skip_verify="${RAVPKG_SKIP_VERIFY:-0}"
+    if [[ "$skip_verify" == "1" ]]; then
+        echo "" >&2
+        echo "==========================================================================" >&2
+        echo "WARNING: --skip-verify is enabled! Checksum verification is BYPASSED." >&2
+        echo "Package integrity for '$pkg_name' cannot be guaranteed." >&2
+        echo "Use this flag for local testing and development only!" >&2
+        echo "==========================================================================" >&2
+        echo "" >&2
+    else
+        # Compute actual checksum without extracting payload to disk
+        local actual_checksum=""
+        local file_checksum
+        file_checksum="$(_calc_sha256 "$package_file" | tr -d '\r')"
+        if [[ "$file_checksum" == "$expected_checksum" ]]; then
+            actual_checksum="$file_checksum"
+        else
+            # Stream uncompressed archive payload contents excluding manifest.json
+            actual_checksum="$(tar -xf "$package_file" --exclude=manifest.json -O 2>/dev/null | _calc_sha256 - || echo "")"
+            actual_checksum="$(echo "$actual_checksum" | tr -d '\r')"
+            actual_checksum="${actual_checksum//$'\r'/}"
+        fi
+
+        if [[ -z "$expected_checksum" || "$expected_checksum" != "$actual_checksum" ]]; then
+            echo "Error: checksum mismatch for package '$pkg_name'!" >&2
+            echo "  Expected: $expected_checksum" >&2
+            echo "  Actual:   ${actual_checksum:-<none>}" >&2
+            echo "Installation rejected. No package files were extracted or written." >&2
+            rm -rf "$STAGE_DIR"
+            trap - ERR
+            return 1
+        fi
+
+        echo "[INSTALL] Checksum verified: $expected_checksum"
+    fi
+
+    # 5. Extract package payload into staging directory only AFTER checksum is verified
     if ! tar -xf "$package_file" -C "$STAGE_DIR"; then
         echo "Error: failed to extract package archive contents into staging" >&2
         rm -rf "$STAGE_DIR"
         trap - ERR
         return 1
     fi
-
-    # Compute actual checksum of payload:
-    # If payload.tar.gz or payload.tar exists in staging, hash that file;
-    # otherwise hash all extracted payload files (excluding manifest.json)
-    local actual_checksum
-    if [[ -f "$STAGE_DIR/payload.tar.gz" ]]; then
-        actual_checksum="$(_calc_sha256 "$STAGE_DIR/payload.tar.gz")"
-    elif [[ -f "$STAGE_DIR/payload.tar" ]]; then
-        actual_checksum="$(_calc_sha256 "$STAGE_DIR/payload.tar")"
-    else
-        # Stream archive payload contents excluding manifest.json
-        actual_checksum="$(tar -xf "$package_file" --exclude=manifest.json -O 2>/dev/null | _calc_sha256 - || echo "")"
-        if [[ -z "$actual_checksum" || "$actual_checksum" == "-"* ]]; then
-            # Fallback: compute hash across all payload files
-            actual_checksum="$(cd "$STAGE_DIR" && find . -type f ! -name manifest.json | sort | xargs _calc_sha256 | _calc_sha256 -)"
-        fi
-    fi
-    actual_checksum="$(echo "$actual_checksum" | tr -d '\r')"
-    actual_checksum="${actual_checksum//$'\r'/}"
-
-    if [[ -n "$expected_checksum" && "$expected_checksum" != "$actual_checksum" ]]; then
-        echo "Error: checksum mismatch for package '$pkg_name'!" >&2
-        echo "  Expected: $expected_checksum" >&2
-        echo "  Actual:   $actual_checksum" >&2
-        rm -rf "$STAGE_DIR"
-        trap - ERR
-        return 1
-    fi
-
-    echo "[INSTALL] Checksum verified: $expected_checksum"
 
     # 5. Validate install_paths before moving any files
     local mappings_count

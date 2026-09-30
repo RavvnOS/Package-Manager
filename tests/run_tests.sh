@@ -180,6 +180,27 @@ else
     FAILED=$((FAILED + 1))
 fi
 
+# 3b. --skip-verify bypasses checksum enforcement with loud warning logged
+SKIP_OUT="$("$ROOT_DIR/bin/ravpkg" --root "$IR_SANDBOX" --db "$IR_DB" install --skip-verify "$BAD_PKG" 2>&1 || true)"
+if [[ "$SKIP_OUT" =~ "WARNING: --skip-verify is enabled! Checksum verification is BYPASSED." ]]; then
+    echo "  [PASS] --skip-verify printed loud warning banner"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] --skip-verify warning banner not found in output"
+    FAILED=$((FAILED + 1))
+fi
+
+if [[ -f "$IR_SANDBOX/usr/local/bin/bad" ]]; then
+    echo "  [PASS] --skip-verify bypassed checksum check and installed files"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] --skip-verify failed to install files"
+    FAILED=$((FAILED + 1))
+fi
+
+# Remove bad-app so sandbox and DB remain clean for subsequent tests
+"$ROOT_DIR/bin/ravpkg" --root "$IR_SANDBOX" --db "$IR_DB" remove "bad-app" >/dev/null 2>&1 || true
+
 # 4. Path traversal rejection
 TRAV_BUILD="$IR_TMP/trav_build"
 mkdir -p "$TRAV_BUILD/bin"
