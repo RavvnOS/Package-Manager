@@ -1,98 +1,107 @@
 # ravpkg
 
-`ravpkg` is a minimal-viable package manager designed for **ravynOS** (a macOS-compatible open-source operating system built on Darwin/FreeBSD userland).
+`ravpkg` is a minimal-viable package manager designed for **ravynOS**, a
+macOS-compatible open-source operating system built on a Darwin/FreeBSD
+userland.
 
-This repository contains the **Phase 1–2 scaffolding** implemented in pure **Bash**, utilizing `sqlite3` for local database package tracking and `jq` for manifest parsing and validation.
+This repository contains the **Phase 1–2 scaffolding**, implemented in pure
+Bash: package manifest schema, local SQLite database tracking, a manifest
+parser/validator, and CLI command routing.
+
+---
+
+## Status
+
+- **Phase:** 1–2 complete (design, core engine, CLI skeleton)
+- **Language:** Bash (uses `sqlite3` and `jq` as external tools — no compiled
+  binary or language runtime required)
+- **Functional commands:** `list`, `info`
+- **Stub commands:** `install`, `remove`, `search` (deferred to later phases)
+- **Not yet implemented:** dependency resolution, filesystem install/remove
+  logic, remote repository tooling, daemon/launchd integration, signing
 
 ---
 
 ## Command Status
 
-| Command | Status | Description | Phase |
-| :--- | :--- | :--- | :--- |
-| `ravpkg list` | **Functional** | Queries and lists all installed packages from local SQLite DB. | Phase 1 |
-| `ravpkg info <pkg>` | **Functional** | Displays metadata and installed file paths for a package. | Phase 1 |
-| `ravpkg install <file>` | **Stub** | Unpack and filesystem install logic (deferred to Phase 2). | Phase 2 |
-| `ravpkg remove <pkg>` | **Stub** | Filesystem file removal logic (deferred to Phase 2). | Phase 2 |
-| `ravpkg search <query>` | **Stub** | Remote repository index query (deferred to Phase 4). | Phase 4 |
+| Command                 | Status         | Description                                                        | Phase   |
+| ------------------------ | -------------- | -------------------------------------------------------------------- | ------- |
+| `ravpkg list`            | **Functional** | Queries and lists all installed packages from the local SQLite DB.   | Phase 1 |
+| `ravpkg info <pkg>`      | **Functional** | Displays metadata and installed file paths for a package.            | Phase 1 |
+| `ravpkg install <file>`  | Stub           | Unpack and filesystem install logic.                                 | Phase 2 |
+| `ravpkg remove <pkg>`    | Stub           | Filesystem file removal logic.                                       | Phase 2 |
+| `ravpkg search <query>`  | Stub           | Remote repository index query.                                       | Phase 4 |
 
-> [!NOTE]
-> Dependency resolution and launchd/daemon service integration are deferred to subsequent phases.
+> Dependency resolution and launchd/daemon service integration are deferred
+> to subsequent phases.
 
 ---
 
 ## Project Structure
 
-```text
+```
 ravpkg/
 ├── bin/
-│   └── ravpkg                  # Main executable script, argument parser & command routing
+│   └── ravpkg                  # Main executable script; argument parsing & subcommand dispatch
 ├── lib/
-│   ├── db.sh                   # sqlite3 wrapper functions (installed_packages table)
-│   └── parser.sh               # jq-based manifest JSON parser and validator
+│   ├── db.sh                   # sqlite3 wrapper functions (init, add, remove, get, list)
+│   └── parser.sh               # jq-based manifest parsing & schema validation functions
 ├── schema/
-│   └── schema.sql              # SQLite table definitions (installed_packages)
+│   └── schema.sql               # SQLite table definitions (installed_packages)
 ├── tests/
-│   ├── fixtures/
-│   │   ├── valid-manifest.json          # Example valid package manifest
-│   │   ├── with-deps-manifest.json      # Manifest with dependencies & multiple paths
-│   │   ├── missing-fields-manifest.json # Invalid manifest (missing required fields)
-│   │   └── bad-checksum-manifest.json   # Invalid manifest (malformed SHA256)
-│   ├── test_parser.bats        # bats tests for parser & validation rules
-│   ├── test_db.bats            # bats tests for SQLite CRUD operations
-│   └── run_tests.sh            # Standalone test runner (bats or native bash fallback)
+│   ├── fixtures/                # JSON manifest fixtures
+│   │   ├── valid-manifest.json
+│   │   ├── with-deps-manifest.json
+│   │   ├── missing-fields-manifest.json
+│   │   └── bad-checksum-manifest.json
+│   ├── test_parser.bats         # bats tests for parser & validation rules
+│   ├── test_db.bats             # bats tests for SQLite CRUD operations
+│   └── run_tests.sh             # Standalone test runner (works with or without bats)
 ├── docs/
-│   └── manifest-spec.md        # Formal specification for package manifest schema
-├── .gitignore                  # Git ignore rules for SQLite databases, temporary files
-├── install.sh                  # Installation script (copies ravpkg to /usr/local/bin)
-├── Makefile                    # Targets for test, install, clean
-└── README.md                   # Project documentation
+│   └── manifest-spec.md         # Formal specification for package manifest schema
+├── install.sh                   # Installer script; checks sqlite3/jq, installs to /usr/local/bin
+├── Makefile                     # Targets: test, install, clean
+└── README.md                    # Project documentation
 ```
 
 ---
 
-## Prerequisites
+## Requirements
 
-- **Bash** (v4.0 or newer)
-- **sqlite3**
-- **jq** (for JSON manifest parsing and validation)
-- *(Optional)* **bats-core** (for running test suites)
+- **bash** v4+
+- **sqlite3** (CLI)
+- **jq**
 
----
-
-## Installation & Setup
-
-No compilation or build step is required.
-
-### Quick Run
-Make `bin/ravpkg` executable and run it directly:
-```bash
-chmod +x bin/ravpkg
-./bin/ravpkg --help
-```
-
-### System Installation
-Run the install script to copy `ravpkg` to `/usr/local/bin` and libraries to `/usr/local/lib/ravpkg`:
-```bash
-sudo ./install.sh
-# or using Make
-sudo make install
-```
+No compiler or language runtime is required — `ravpkg` is a plain shell
+script plus supporting library files.
 
 ---
 
-## Running Tests
+## Build & Test Instructions
 
-Run the test suite via the test runner:
+### Installing
+
 ```bash
+./install.sh
+# or
+make install
+```
+
+This checks for `sqlite3` and `jq` on `PATH`, then installs `bin/ravpkg` to
+`${PREFIX:-/usr/local}/bin` and the library files to
+`${PREFIX:-/usr/local}/lib/ravpkg`.
+
+### Running Unit Tests
+
+```bash
+# With bats installed
+bats tests/
+
+# Without bats
+./tests/run_tests.sh
+
 # Using Makefile
 make test
-
-# Or directly with bash
-bash tests/run_tests.sh
-
-# Or using bats directly (if installed)
-bats tests/test_*.bats
 ```
 
 ---
@@ -100,26 +109,30 @@ bats tests/test_*.bats
 ## Usage Examples
 
 ```bash
-# Show command help
 ./bin/ravpkg --help
 
 # List installed packages
-./bin/ravpkg list
+./bin/ravpkg list --db ./test.db
 
 # View package info
-./bin/ravpkg info ravterm
+./bin/ravpkg info ravterm --db ./test.db
 
-# Specify a custom database path (useful for testing)
-./bin/ravpkg --db ./test.db list
-
-# Stubs
+# Stubs (not yet implemented)
 ./bin/ravpkg install ./sample-package.rav
 ./bin/ravpkg remove sample-package
 ./bin/ravpkg search editor
 ```
 
+Database path resolution order: `--db <path>` / `-d <path>` flag →
+`$RAVPKG_DB` environment variable → `/var/db/ravpkg/pkg.db` → `./ravpkg.db`.
+
 ---
 
 ## Specification Reference
 
-See [`docs/manifest-spec.md`](docs/manifest-spec.md) for the full JSON schema and field constraints.
+See [`docs/manifest-spec.md`](docs/manifest-spec.md) for the full JSON
+schema and field constraints. This schema is unchanged from the original
+implementation.
+
+---
+
