@@ -679,6 +679,449 @@ fi
 rm -rf "$DEP_TMP"
 
 echo ""
+echo "--- Multi-Package Transaction Planning & Full Rollback Tests ---"
+TR_TMP="$(mktemp -d 2>/dev/null || mktemp -d -t 'ravpkg-tr-test')"
+TR_SANDBOX="$TR_TMP/sandbox"
+TR_DB="$TR_TMP/pkg.db"
+mkdir -p "$TR_SANDBOX"
+db_init "$TR_DB" "$SCHEMA"
+
+# 1. Simple chain: chainC -> chainB -> chainA
+C_BUILD="$TR_TMP/c_build"
+mkdir -p "$C_BUILD/bin"
+echo "bin-c" > "$C_BUILD/bin/c"
+C_CS="$(cat "$C_BUILD/bin/c" | _calc_sha256 -)"
+cat <<EOF > "$C_BUILD/manifest.json"
+{
+  "name": "chainC",
+  "version": "1.0.0",
+  "description": "Chain C",
+  "checksum": "$C_CS",
+  "install_paths": [
+    { "source": "bin/c", "destination": "/usr/local/bin/c" }
+  ],
+  "dependencies": []
+}
+EOF
+C_PKG="$TR_TMP/chainC-1.0.0.rav"
+(cd "$C_BUILD" && tar -czf "$C_PKG" manifest.json bin/c)
+
+B_BUILD="$TR_TMP/b_build"
+mkdir -p "$B_BUILD/bin"
+echo "bin-b" > "$B_BUILD/bin/b"
+B_CS="$(cat "$B_BUILD/bin/b" | _calc_sha256 -)"
+cat <<EOF > "$B_BUILD/manifest.json"
+{
+  "name": "chainB",
+  "version": "1.0.0",
+  "description": "Chain B",
+  "checksum": "$B_CS",
+  "install_paths": [
+    { "source": "bin/b", "destination": "/usr/local/bin/b" }
+  ],
+  "dependencies": [
+    { "name": "chainC", "constraint": ">=1.0.0" }
+  ]
+}
+EOF
+B_PKG="$TR_TMP/chainB-1.0.0.rav"
+(cd "$B_BUILD" && tar -czf "$B_PKG" manifest.json bin/b)
+
+A_BUILD="$TR_TMP/a_build"
+mkdir -p "$A_BUILD/bin"
+echo "bin-a" > "$A_BUILD/bin/a"
+A_CS="$(cat "$A_BUILD/bin/a" | _calc_sha256 -)"
+cat <<EOF > "$A_BUILD/manifest.json"
+{
+  "name": "chainA",
+  "version": "1.0.0",
+  "description": "Chain A",
+  "checksum": "$A_CS",
+  "install_paths": [
+    { "source": "bin/a", "destination": "/usr/local/bin/a" }
+  ],
+  "dependencies": [
+    { "name": "chainB", "constraint": ">=1.0.0" }
+  ]
+}
+EOF
+A_PKG="$TR_TMP/chainA-1.0.0.rav"
+(cd "$A_BUILD" && tar -czf "$A_PKG" manifest.json bin/a)
+
+TR_INDEX="$TR_TMP/index.json"
+cat <<EOF > "$TR_INDEX"
+[
+  {
+    "name": "chainC",
+    "version": "1.0.0",
+    "description": "Chain C",
+    "download_url": "file://$C_PKG",
+    "checksum": "$C_CS",
+    "dependencies": []
+  },
+  {
+    "name": "chainB",
+    "version": "1.0.0",
+    "description": "Chain B",
+    "download_url": "file://$B_PKG",
+    "checksum": "$B_CS",
+    "dependencies": [
+      { "name": "chainC", "constraint": ">=1.0.0" }
+    ]
+  },
+  {
+    "name": "chainA",
+    "version": "1.0.0",
+    "description": "Chain A",
+    "download_url": "file://$A_PKG",
+    "checksum": "$A_CS",
+    "dependencies": [
+      { "name": "chainB", "constraint": ">=1.0.0" }
+    ]
+  }
+]
+EOF
+
+assert_ok "simple chain installs in dependency order (C -> B -> A)" "$ROOT_DIR/bin/ravpkg" --root "$TR_SANDBOX" --db "$TR_DB" --repo "$TR_INDEX" --cache "$TR_TMP/cache.json" --no-cache -y install chainA
+if [[ -f "$TR_SANDBOX/usr/local/bin/c" && -f "$TR_SANDBOX/usr/local/bin/b" && -f "$TR_SANDBOX/usr/local/bin/a" ]]; then
+    echo "  [PASS] all packages in dependency chain deployed to filesystem"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] packages in dependency chain missing from filesystem"
+    FAILED=$((FAILED + 1))
+fi
+
+# 2. Diamond dependency: diamTop -> diamLeft, diamRight -> diamBase
+DBASE_BUILD="$TR_TMP/dbase_build"
+mkdir -p "$DBASE_BUILD/bin"
+echo "dbase" > "$DBASE_BUILD/bin/dbase"
+DBASE_CS="$(cat "$DBASE_BUILD/bin/dbase" | _calc_sha256 -)"
+cat <<EOF > "$DBASE_BUILD/manifest.json"
+{
+  "name": "diamBase",
+  "version": "1.0.0",
+  "description": "Diamond Base",
+  "checksum": "$DBASE_CS",
+  "install_paths": [
+    { "source": "bin/dbase", "destination": "/usr/local/bin/dbase" }
+  ],
+  "dependencies": []
+}
+EOF
+DBASE_PKG="$TR_TMP/diamBase-1.0.0.rav"
+(cd "$DBASE_BUILD" && tar -czf "$DBASE_PKG" manifest.json bin/dbase)
+
+DLEFT_BUILD="$TR_TMP/dleft_build"
+mkdir -p "$DLEFT_BUILD/bin"
+echo "dleft" > "$DLEFT_BUILD/bin/dleft"
+DLEFT_CS="$(cat "$DLEFT_BUILD/bin/dleft" | _calc_sha256 -)"
+cat <<EOF > "$DLEFT_BUILD/manifest.json"
+{
+  "name": "diamLeft",
+  "version": "1.0.0",
+  "description": "Diamond Left",
+  "checksum": "$DLEFT_CS",
+  "install_paths": [
+    { "source": "bin/dleft", "destination": "/usr/local/bin/dleft" }
+  ],
+  "dependencies": [
+    { "name": "diamBase", "constraint": ">=1.0.0" }
+  ]
+}
+EOF
+DLEFT_PKG="$TR_TMP/diamLeft-1.0.0.rav"
+(cd "$DLEFT_BUILD" && tar -czf "$DLEFT_PKG" manifest.json bin/dleft)
+
+DRIGHT_BUILD="$TR_TMP/dright_build"
+mkdir -p "$DRIGHT_BUILD/bin"
+echo "dright" > "$DRIGHT_BUILD/bin/dright"
+DRIGHT_CS="$(cat "$DRIGHT_BUILD/bin/dright" | _calc_sha256 -)"
+cat <<EOF > "$DRIGHT_BUILD/manifest.json"
+{
+  "name": "diamRight",
+  "version": "1.0.0",
+  "description": "Diamond Right",
+  "checksum": "$DRIGHT_CS",
+  "install_paths": [
+    { "source": "bin/dright", "destination": "/usr/local/bin/dright" }
+  ],
+  "dependencies": [
+    { "name": "diamBase", "constraint": ">=1.0.0" }
+  ]
+}
+EOF
+DRIGHT_PKG="$TR_TMP/diamRight-1.0.0.rav"
+(cd "$DRIGHT_BUILD" && tar -czf "$DRIGHT_PKG" manifest.json bin/dright)
+
+DTOP_BUILD="$TR_TMP/dtop_build"
+mkdir -p "$DTOP_BUILD/bin"
+echo "dtop" > "$DTOP_BUILD/bin/dtop"
+DTOP_CS="$(cat "$DTOP_BUILD/bin/dtop" | _calc_sha256 -)"
+cat <<EOF > "$DTOP_BUILD/manifest.json"
+{
+  "name": "diamTop",
+  "version": "1.0.0",
+  "description": "Diamond Top",
+  "checksum": "$DTOP_CS",
+  "install_paths": [
+    { "source": "bin/dtop", "destination": "/usr/local/bin/dtop" }
+  ],
+  "dependencies": [
+    { "name": "diamLeft", "constraint": ">=1.0.0" },
+    { "name": "diamRight", "constraint": ">=1.0.0" }
+  ]
+}
+EOF
+DTOP_PKG="$TR_TMP/diamTop-1.0.0.rav"
+(cd "$DTOP_BUILD" && tar -czf "$DTOP_PKG" manifest.json bin/dtop)
+
+DIAM_INDEX="$TR_TMP/diam_index.json"
+cat <<EOF > "$DIAM_INDEX"
+[
+  {
+    "name": "diamBase",
+    "version": "1.0.0",
+    "description": "Diamond Base",
+    "download_url": "file://$DBASE_PKG",
+    "checksum": "$DBASE_CS",
+    "dependencies": []
+  },
+  {
+    "name": "diamLeft",
+    "version": "1.0.0",
+    "description": "Diamond Left",
+    "download_url": "file://$DLEFT_PKG",
+    "checksum": "$DLEFT_CS",
+    "dependencies": [
+      { "name": "diamBase", "constraint": ">=1.0.0" }
+    ]
+  },
+  {
+    "name": "diamRight",
+    "version": "1.0.0",
+    "description": "Diamond Right",
+    "download_url": "file://$DRIGHT_PKG",
+    "checksum": "$DRIGHT_CS",
+    "dependencies": [
+      { "name": "diamBase", "constraint": ">=1.0.0" }
+    ]
+  },
+  {
+    "name": "diamTop",
+    "version": "1.0.0",
+    "description": "Diamond Top",
+    "download_url": "file://$DTOP_PKG",
+    "checksum": "$DTOP_CS",
+    "dependencies": [
+      { "name": "diamLeft", "constraint": ">=1.0.0" },
+      { "name": "diamRight", "constraint": ">=1.0.0" }
+    ]
+  }
+]
+EOF
+
+assert_ok "diamond dependency installs shared dependency once" "$ROOT_DIR/bin/ravpkg" --root "$TR_SANDBOX" --db "$TR_DB" --repo "$DIAM_INDEX" --cache "$TR_TMP/diam_cache.json" --no-cache -y install diamTop
+if [[ -f "$TR_SANDBOX/usr/local/bin/dbase" && -f "$TR_SANDBOX/usr/local/bin/dleft" && -f "$TR_SANDBOX/usr/local/bin/dright" && -f "$TR_SANDBOX/usr/local/bin/dtop" ]]; then
+    echo "  [PASS] diamond dependency installed all 4 packages without duplicate error"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] diamond dependency files missing"
+    FAILED=$((FAILED + 1))
+fi
+
+# 3. Unresolvable dependency deep in chain aborts entire operation
+GHOST_INDEX="$TR_TMP/ghost_index.json"
+cat <<EOF > "$GHOST_INDEX"
+[
+  {
+    "name": "deepMid",
+    "version": "1.0.0",
+    "description": "Mid",
+    "download_url": "file:///tmp/dummy",
+    "checksum": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "dependencies": [
+      { "name": "ghostPackage", "constraint": ">=2.0.0" }
+    ]
+  },
+  {
+    "name": "deepTop",
+    "version": "1.0.0",
+    "description": "Top",
+    "download_url": "file:///tmp/dummy",
+    "checksum": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "dependencies": [
+      { "name": "deepMid", "constraint": ">=1.0.0" }
+    ]
+  }
+]
+EOF
+
+assert_fail "unresolvable dependency deep in chain aborts operation" "$ROOT_DIR/bin/ravpkg" --root "$TR_SANDBOX" --db "$TR_DB" --repo "$GHOST_INDEX" --cache "$TR_TMP/ghost_cache.json" --no-cache -y install deepTop
+
+# 4. Circular dependency across full plan rejected
+CYC_INDEX="$TR_TMP/cyc_index.json"
+cat <<EOF > "$CYC_INDEX"
+[
+  {
+    "name": "cycleA",
+    "version": "1.0.0",
+    "description": "A",
+    "download_url": "file:///tmp/dummy",
+    "checksum": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "dependencies": [
+      { "name": "cycleB", "constraint": ">=1.0.0" }
+    ]
+  },
+  {
+    "name": "cycleB",
+    "version": "1.0.0",
+    "description": "B",
+    "download_url": "file:///tmp/dummy",
+    "checksum": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "dependencies": [
+      { "name": "cycleC", "constraint": ">=1.0.0" }
+    ]
+  },
+  {
+    "name": "cycleC",
+    "version": "1.0.0",
+    "description": "C",
+    "download_url": "file:///tmp/dummy",
+    "checksum": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "dependencies": [
+      { "name": "cycleA", "constraint": ">=1.0.0" }
+    ]
+  }
+]
+EOF
+
+assert_fail "circular dependency across multi-package plan rejected" "$ROOT_DIR/bin/ravpkg" --root "$TR_SANDBOX" --db "$TR_DB" --repo "$CYC_INDEX" --cache "$TR_TMP/cyc_cache.json" --no-cache -y install cycleA
+
+# 5. Mid-transaction failure triggers full transaction rollback
+RB_SANDBOX="$TR_TMP/rb_sandbox"
+RB_DB="$TR_TMP/rb_pkg.db"
+mkdir -p "$RB_SANDBOX"
+db_init "$RB_DB" "$SCHEMA"
+
+RBASE_BUILD="$TR_TMP/rbase_build"
+mkdir -p "$RBASE_BUILD/bin"
+echo "rbase" > "$RBASE_BUILD/bin/rbase"
+RBASE_CS="$(cat "$RBASE_BUILD/bin/rbase" | _calc_sha256 -)"
+cat <<EOF > "$RBASE_BUILD/manifest.json"
+{
+  "name": "rbBase",
+  "version": "1.0.0",
+  "description": "Rollback Base",
+  "checksum": "$RBASE_CS",
+  "install_paths": [
+    { "source": "bin/rbase", "destination": "/usr/local/bin/rbase" }
+  ],
+  "dependencies": []
+}
+EOF
+RBASE_PKG="$TR_TMP/rbBase-1.0.0.rav"
+(cd "$RBASE_BUILD" && tar -czf "$RBASE_PKG" manifest.json bin/rbase)
+
+RBROKE_BUILD="$TR_TMP/rbroke_build"
+mkdir -p "$RBROKE_BUILD/bin"
+echo "broke" > "$RBROKE_BUILD/bin/broke"
+RBROKE_CS="$(cat "$RBROKE_BUILD/bin/broke" | _calc_sha256 -)"
+cat <<EOF > "$RBROKE_BUILD/manifest.json"
+{
+  "name": "rbBroke",
+  "version": "1.0.0",
+  "description": "Rollback Broken",
+  "checksum": "$RBROKE_CS",
+  "install_paths": [
+    { "source": "bin/broke", "destination": "/usr/local/invalid_dir/sub/broke" }
+  ],
+  "dependencies": [
+    { "name": "rbBase", "constraint": ">=1.0.0" }
+  ]
+}
+EOF
+RBROKE_PKG="$TR_TMP/rbBroke-1.0.0.rav"
+(cd "$RBROKE_BUILD" && tar -czf "$RBROKE_PKG" manifest.json bin/broke)
+
+RTOP_BUILD="$TR_TMP/rtop_build"
+mkdir -p "$RTOP_BUILD/bin"
+echo "top" > "$RTOP_BUILD/bin/top"
+RTOP_CS="$(cat "$RTOP_BUILD/bin/top" | _calc_sha256 -)"
+cat <<EOF > "$RTOP_BUILD/manifest.json"
+{
+  "name": "rbTop",
+  "version": "1.0.0",
+  "description": "Rollback Top",
+  "checksum": "$RTOP_CS",
+  "install_paths": [
+    { "source": "bin/top", "destination": "/usr/local/bin/top" }
+  ],
+  "dependencies": [
+    { "name": "rbBroke", "constraint": ">=1.0.0" }
+  ]
+}
+EOF
+RTOP_PKG="$TR_TMP/rbTop-1.0.0.rav"
+(cd "$RTOP_BUILD" && tar -czf "$RTOP_PKG" manifest.json bin/top)
+
+# Block directory creation for rbBroke
+mkdir -p "$RB_SANDBOX/usr/local"
+touch "$RB_SANDBOX/usr/local/invalid_dir"
+
+RB_INDEX="$TR_TMP/rb_index.json"
+cat <<EOF > "$RB_INDEX"
+[
+  {
+    "name": "rbBase",
+    "version": "1.0.0",
+    "description": "Rollback Base",
+    "download_url": "file://$RBASE_PKG",
+    "checksum": "$RBASE_CS",
+    "dependencies": []
+  },
+  {
+    "name": "rbBroke",
+    "version": "1.0.0",
+    "description": "Rollback Broken",
+    "download_url": "file://$RBROKE_PKG",
+    "checksum": "$RBROKE_CS",
+    "dependencies": [
+      { "name": "rbBase", "constraint": ">=1.0.0" }
+    ]
+  },
+  {
+    "name": "rbTop",
+    "version": "1.0.0",
+    "description": "Rollback Top",
+    "download_url": "file://$RTOP_PKG",
+    "checksum": "$RTOP_CS",
+    "dependencies": [
+      { "name": "rbBroke", "constraint": ">=1.0.0" }
+    ]
+  }
+]
+EOF
+
+assert_fail "mid-transaction failure triggers rollback" "$ROOT_DIR/bin/ravpkg" --root "$RB_SANDBOX" --db "$RB_DB" --repo "$RB_INDEX" --cache "$TR_TMP/rb_cache.json" --no-cache -y install rbTop
+if [[ ! -f "$RB_SANDBOX/usr/local/bin/rbase" && ! -f "$RB_SANDBOX/usr/local/bin/top" ]]; then
+    echo "  [PASS] full transaction rollback removed previously installed packages from filesystem"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] full transaction rollback left files on filesystem"
+    FAILED=$((FAILED + 1))
+fi
+
+if ! db_get_package "$RB_DB" "rbBase" >/dev/null 2>&1; then
+    echo "  [PASS] full transaction rollback removed database record for rbBase"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] database record for rbBase still present after rollback"
+    FAILED=$((FAILED + 1))
+fi
+
+rm -rf "$TR_TMP"
+
+echo ""
 echo "================================================================="
 echo "Results: $PASSED passed, $FAILED failed."
 if [[ "$FAILED" -gt 0 ]]; then

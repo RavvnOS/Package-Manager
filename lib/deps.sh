@@ -98,6 +98,7 @@ _check_cycles() {
     deps_count="$(echo "$manifest_json" | jq '.dependencies // [] | length')"
     [[ "$deps_count" -eq 0 ]] && return 0
 
+    local i
     for ((i=0; i<deps_count; i++)); do
         local dep_name
         dep_name="$(echo "$manifest_json" | jq -r ".dependencies[$i].name" | tr -d '\r')"
@@ -111,6 +112,7 @@ _check_cycles() {
         # Check if dep_name already exists in current visitation chain
         local IFS=':'
         local -a chain_parts=($chain)
+        local part
         for part in "${chain_parts[@]}"; do
             if [[ "$part" == "$dep_name" ]]; then
                 echo "Error: circular dependency detected: ${chain//:/ -> } -> $dep_name" >&2
@@ -161,6 +163,7 @@ check_package_dependencies() {
     local -a missing_deps=()
     local -a unsatisfied_deps=()
 
+    local i
     for ((i=0; i<deps_count; i++)); do
         local dep_name dep_constraint
         dep_name="$(echo "$manifest_json" | jq -r ".dependencies[$i].name" | tr -d '\r')"
@@ -209,6 +212,7 @@ check_package_dependents_warning() {
     count="$(echo "$all_pkgs_json" | jq 'length' 2>/dev/null || echo 0)"
     [[ "$count" -eq 0 ]] && return 0
 
+    local i
     for ((i=0; i<count; i++)); do
         local other_name other_ver other_manifest
         other_name="$(echo "$all_pkgs_json" | jq -r ".[$i].name" | tr -d '\r')"
@@ -241,6 +245,181 @@ check_package_dependents_warning() {
         echo "Removing '$target_pkg' may cause these packages to stop working properly." >&2
         echo "==========================================================================" >&2
         echo "" >&2
+    fi
+    return 0
+}
+
+# Helper: Finds the highest version candidate from index JSON satisfying a semver constraint
+_find_highest_satisfying_candidate() {
+    local index_cache="$1"
+    local pkg_name="$2"
+    local constraint="${3:-*}"
+
+    if [[ ! -f "$index_cache" || ! -r "$index_cache" ]]; then
+        return 1
+    fi
+
+    # Extract all candidate objects matching pkg_name
+    local matching_json
+    matching_json="$(jq -c --arg name "$pkg_name" '[.[] | select(.name == $name)]' "$index_cache" 2>/dev/null || echo "[]")"
+    local count
+    count="$(echo "$matching_json" | jq 'length' 2>/dev/null || echo 0)"
+    [[ "$count" -eq 0 ]] && return 1
+
+    local best_entry=""
+    local best_ver=""
+
+    local c
+    for ((c=0; c<count; c++)); do
+        local entry cand_ver
+        entry="$(echo "$matching_json" | jq -c ".[$c]")"
+        cand_ver="$(echo "$entry" | jq -r '.version' | tr -d '\r')"
+
+        if semver_satisfies "$cand_ver" "$constraint"; then
+            if [[ -z "$best_ver" ]]; then
+                best_ver="$cand_ver"
+                best_entry="$entry"
+            else
+                local cmp=0
+                semver_compare "$cand_ver" "$best_ver" || cmp=$?
+                if [[ $cmp -eq 1 ]]; then
+                    best_ver="$cand_ver"
+                    best_entry="$entry"
+                fi
+            fi
+        fi
+    done
+
+    if [[ -z "$best_entry" ]]; then
+        return 1
+    fi
+
+    echo "$best_entry"
+    return 0
+}
+
+# Constructs a topological, deduplicated installation plan for all unsatisfied dependencies
+deps_build_install_plan() {
+    local root_name="$1"
+    local root_manifest_json="$2"
+    local db_path="$3"
+    local index_cache="$4"
+    local root_prefix="${5:-}"
+
+    local -a PLAN_ENTRIES=()
+    local -a RESOLVED_PKGS=()
+
+    _resolve_deps_recursive() {
+        local current_pkg="$1"
+        local manifest_json="$2"
+        local parent_chain="$3"
+
+        # Check for circular dependency in active resolution chain
+        if [[ -n "$parent_chain" ]]; then
+            local IFS=':'
+            local -a chain_parts=($parent_chain)
+            local part
+            for part in "${chain_parts[@]}"; do
+                if [[ "$part" == "$current_pkg" ]]; then
+                    echo "Error: circular dependency detected across transaction plan: ${parent_chain//:/ -> } -> $current_pkg" >&2
+                    return 1
+                fi
+            done
+        fi
+
+        local active_chain="${parent_chain:+${parent_chain}:}${current_pkg}"
+
+        local deps_count
+        deps_count="$(echo "$manifest_json" | jq '.dependencies // [] | length' 2>/dev/null || echo 0)"
+
+        local d
+        for ((d=0; d<deps_count; d++)); do
+            local dep_name dep_constraint
+            dep_name="$(echo "$manifest_json" | jq -r ".dependencies[$d].name" | tr -d '\r')"
+            dep_constraint="$(echo "$manifest_json" | jq -r ".dependencies[$d].constraint // \"*\"" | tr -d '\r')"
+
+            # 1. Skip if already resolved and scheduled in the plan (deduplicates diamond dependencies)
+            local already_resolved=0
+            local r
+            for r in "${RESOLVED_PKGS[@]:-}"; do
+                if [[ "$r" == "$dep_name" ]]; then
+                    already_resolved=1
+                    break
+                fi
+            done
+            if [[ "$already_resolved" -eq 1 ]]; then
+                continue
+            fi
+
+            # 2. Check for cycle in active recursion chain
+            local IFS=':'
+            local -a chain_parts=($active_chain)
+            local part
+            for part in "${chain_parts[@]}"; do
+                if [[ "$part" == "$dep_name" ]]; then
+                    echo "Error: circular dependency detected across transaction plan: ${active_chain//:/ -> } -> $dep_name" >&2
+                    return 1
+                fi
+            done
+
+            # 3. Check if dependency is already installed in local database
+            local pkg_json
+            if pkg_json="$(db_get_package "$db_path" "$dep_name" 2>/dev/null)"; then
+                local installed_ver
+                installed_ver="$(echo "$pkg_json" | jq -r '.version' | tr -d '\r')"
+                if semver_satisfies "$installed_ver" "$dep_constraint"; then
+                    # Satisfied by existing installation
+                    continue
+                else
+                    # Installed but does not satisfy constraint
+                    echo "Error: dependency '$dep_name' is already installed at version $installed_ver, which does not satisfy constraint '$dep_constraint' (required by '$current_pkg')." >&2
+                    echo "Upgrades and side-by-side installations are not supported; please remove or update '$dep_name' first." >&2
+                    return 1
+                fi
+            fi
+
+            # 4. Search repository index for highest satisfying version
+            local cand_entry
+            if ! cand_entry="$(_find_highest_satisfying_candidate "$index_cache" "$dep_name" "$dep_constraint")"; then
+                echo "Error: cannot resolve dependency '$dep_name' (constraint: $dep_constraint) required by '$current_pkg'." >&2
+                echo "No satisfying package version found in repository index." >&2
+                return 1
+            fi
+
+            # 5. Recursively resolve sub-dependencies of this candidate
+            if ! _resolve_deps_recursive "$dep_name" "$cand_entry" "$active_chain"; then
+                return 1
+            fi
+
+            # 6. Post-order scheduling: append after all its dependencies have been scheduled
+            local already_added=0
+            local r
+            for r in "${RESOLVED_PKGS[@]:-}"; do
+                if [[ "$r" == "$dep_name" ]]; then
+                    already_added=1
+                    break
+                fi
+            done
+            if [[ "$already_added" -eq 0 ]]; then
+                RESOLVED_PKGS+=("$dep_name")
+                local enriched_entry
+                enriched_entry="$(echo "$cand_entry" | jq -c --arg req_by "$current_pkg" --arg req_cs "$dep_constraint" '
+                    . + {required_by: $req_by, constraint: $req_cs, source: "repo"}
+                ')"
+                PLAN_ENTRIES+=("$enriched_entry")
+            fi
+        done
+        return 0
+    }
+
+    if ! _resolve_deps_recursive "$root_name" "$root_manifest_json" ""; then
+        return 1
+    fi
+
+    if [[ ${#PLAN_ENTRIES[@]} -eq 0 ]]; then
+        echo "[]"
+    else
+        printf '%s\n' "${PLAN_ENTRIES[@]}" | jq -s '.'
     fi
     return 0
 }

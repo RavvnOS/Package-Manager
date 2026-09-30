@@ -95,6 +95,7 @@ Flags:
       --no-cache        Force a fresh repository index fetch before resolving
       --no-deps         Skip dependency resolution checks
       --skip-verify     Skip package checksum verification (DEVELOPMENT ONLY)
+  -y, --yes             Automatically answer yes to confirmation prompts
   -h, --help            help for ravpkg
 
 Use "ravpkg [command] --help" for more information about a command.
@@ -139,6 +140,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-cache)
             export RAVPKG_NO_CACHE=1
+            shift
+            ;;
+        -y|--yes)
+            export RAVPKG_YES=1
             shift
             ;;
         --skip-verify)
@@ -275,6 +280,8 @@ case "$COMMAND" in
                 export RAVPKG_NO_DEPS=1
             elif [[ "$sarg" == "--no-cache" ]]; then
                 export RAVPKG_NO_CACHE=1
+            elif [[ "$sarg" == "--yes" || "$sarg" == "-y" ]]; then
+                export RAVPKG_YES=1
             else
                 clean_subargs+=("$sarg")
             fi
@@ -289,11 +296,18 @@ case "$COMMAND" in
             if [[ ${#SUBARGS[@]} -eq 0 ]]; then
                 echo "Error: accepts 1 arg(s), received 0" >&2
             fi
-            echo "Usage: ravpkg install <package-file|package-name> [--no-cache] [--skip-verify] [--no-deps]" >&2
+            echo "Usage: ravpkg install <package-file|package-name> [-y|--yes] [--no-cache] [--skip-verify] [--no-deps]" >&2
             exit 1
         fi
         TARGET_ARG="${SUBARGS[0]}"
         db_init "$DB_PATH" "$SCHEMA_FILE"
+
+        if [[ -z "$REPO_CACHE" ]]; then
+            REPO_CACHE="$(repo_get_default_cache_path)"
+        fi
+        if [[ -z "$REPO_URL" ]]; then
+            REPO_URL="${DEFAULT_REPO_URL:-https://repo.ravynos.com/index.json}"
+        fi
 
         is_file_target=0
         if [[ -f "$TARGET_ARG" ]]; then
@@ -302,19 +316,26 @@ case "$COMMAND" in
             is_file_target=1
         fi
 
-        if [[ "$is_file_target" -eq 1 ]]; then
-            # Direct local file install (existing behavior, unchanged)
-            pkg_install "$DB_PATH" "$TARGET_ARG"
-        else
-            # Package name: resolve via repository index
-            if [[ -z "$REPO_CACHE" ]]; then
-                REPO_CACHE="$(repo_get_default_cache_path)"
-            fi
-            if [[ -z "$REPO_URL" ]]; then
-                REPO_URL="${DEFAULT_REPO_URL:-https://repo.ravynos.com/index.json}"
-            fi
+        target_manifest=""
+        target_name=""
+        target_ver=""
+        target_dl_url=""
+        target_idx_cs=""
 
-            # Check if index needs to be fetched or refreshed
+        if [[ "$is_file_target" -eq 1 ]]; then
+            if [[ ! -f "$TARGET_ARG" ]]; then
+                echo "Error: package file does not exist: $TARGET_ARG" >&2
+                exit 1
+            fi
+            target_manifest="$(tar -xf "$TARGET_ARG" -O manifest.json 2>/dev/null || cat "$TARGET_ARG" 2>/dev/null || true)"
+            if [[ -z "$target_manifest" ]]; then
+                echo "Error: invalid package archive (missing manifest.json): $TARGET_ARG" >&2
+                exit 1
+            fi
+            target_name="$(manifest_get_name "$target_manifest" 2>/dev/null || echo "")"
+            target_ver="$(manifest_get_version "$target_manifest" 2>/dev/null || echo "")"
+        else
+            # Package name: ensure repo index is fetched or updated
             if [[ "${RAVPKG_NO_CACHE:-0}" == "1" || ! -f "$REPO_CACHE" ]]; then
                 echo "[REPO] Updating repository index from $REPO_URL..."
                 if ! repo_fetch_index "$REPO_URL" "$REPO_CACHE"; then
@@ -323,74 +344,177 @@ case "$COMMAND" in
                 fi
             fi
 
-            # Look up package in index
             pkg_entry="$(repo_lookup_package "$REPO_CACHE" "$TARGET_ARG" || true)"
             if [[ -z "$pkg_entry" || "$pkg_entry" == "null" ]]; then
                 echo "Error: package '$TARGET_ARG' not found in repository index." >&2
                 exit 1
             fi
 
-            dl_url="$(echo "$pkg_entry" | jq -r '.download_url // empty')"
-            idx_checksum="$(echo "$pkg_entry" | jq -r '.checksum // empty')"
-            pkg_ver="$(echo "$pkg_entry" | jq -r '.version // empty')"
+            target_manifest="$pkg_entry"
+            target_name="$(echo "$pkg_entry" | jq -r '.name // empty')"
+            target_ver="$(echo "$pkg_entry" | jq -r '.version // empty')"
+            target_dl_url="$(echo "$pkg_entry" | jq -r '.download_url // empty')"
+            target_idx_cs="$(echo "$pkg_entry" | jq -r '.checksum // empty')"
 
-            if [[ -z "$dl_url" || -z "$idx_checksum" ]]; then
+            if [[ -z "$target_dl_url" || -z "$target_idx_cs" ]]; then
                 echo "Error: repository entry for '$TARGET_ARG' is missing download_url or checksum." >&2
                 exit 1
             fi
+        fi
 
-            resolved_url="$(repo_resolve_url "$REPO_URL" "$dl_url")"
+        # Build install plan for missing dependencies
+        plan_json="[]"
+        deps_count=0
+        if [[ "${RAVPKG_NO_DEPS:-0}" != "1" ]]; then
+            # Ensure index cache is populated if not already present
+            if [[ ! -f "$REPO_CACHE" ]]; then
+                repo_fetch_index "$REPO_URL" "$REPO_CACHE" 2>/dev/null || true
+            fi
 
-            TMP_PKG="$(mktemp 2>/dev/null || mktemp -t 'ravpkg-dl-XXXXXX.rav')"
-            _clean_tmp_pkg() {
-                if [[ -n "${TMP_PKG:-}" && -f "$TMP_PKG" ]]; then
-                    rm -f "$TMP_PKG"
+            if ! plan_json="$(deps_build_install_plan "$target_name" "$target_manifest" "$DB_PATH" "$REPO_CACHE" "${RAVPKG_ROOT:-}")"; then
+                exit 1
+            fi
+            deps_count="$(echo "$plan_json" | jq 'length' 2>/dev/null || echo 0)"
+        fi
+
+        # Display transaction summary and prompt confirmation
+        if [[ "$deps_count" -gt 0 ]]; then
+            echo ""
+            echo "================================================================================"
+            echo "                           Transaction Summary"
+            echo "================================================================================"
+            echo "Target Package:"
+            echo "  - $target_name ($target_ver)"
+            echo ""
+            echo "Dependencies to be installed from repository ($deps_count):"
+            for ((p=0; p<deps_count; p++)); do
+                p_name="$(echo "$plan_json" | jq -r ".[$p].name")"
+                p_ver="$(echo "$plan_json" | jq -r ".[$p].version")"
+                p_req="$(echo "$plan_json" | jq -r ".[$p].required_by")"
+                p_cs="$(echo "$plan_json" | jq -r ".[$p].constraint")"
+                printf "  %2d. %-18s %-10s (required by: %s, constraint: %s)\n" "$((p+1))" "$p_name" "$p_ver" "$p_req" "$p_cs"
+            done
+            echo ""
+            echo "Total packages to install: $((deps_count + 1))"
+            echo "================================================================================"
+            echo ""
+
+            if [[ "${RAVPKG_YES:-0}" != "1" ]]; then
+                read -r -p "Proceed with installation? [y/N]: " confirm_ans
+                if [[ "$confirm_ans" != "y" && "$confirm_ans" != "Y" ]]; then
+                    echo "Installation cancelled by user." >&2
+                    exit 1
                 fi
-            }
-            trap '_clean_tmp_pkg' EXIT INT TERM ERR
+            fi
+        fi
 
-            echo "[REPO] Downloading $TARGET_ARG ($pkg_ver) from $resolved_url..."
-            if ! repo_download_package "$resolved_url" "$TMP_PKG"; then
-                echo "Error: failed to download package '$TARGET_ARG' from '$resolved_url'" >&2
-                _clean_tmp_pkg
-                trap - EXIT INT TERM ERR
+        # Execute transaction with full rollback tracking
+        INSTALLED_IN_TRANSACTION=()
+
+        _rollback_transaction() {
+            local failed_pkg="$1"
+            echo "" >&2
+            echo "==========================================================================" >&2
+            echo "Transaction failed during installation of '$failed_pkg'!" >&2
+            if [[ ${#INSTALLED_IN_TRANSACTION[@]} -gt 0 ]]; then
+                echo "Executing full transaction rollback: uninstalling previously installed packages..." >&2
+                for ((rb=${#INSTALLED_IN_TRANSACTION[@]}-1; rb>=0; rb--)); do
+                    local rb_pkg="${INSTALLED_IN_TRANSACTION[rb]}"
+                    echo "[ROLLBACK] Uninstalling package '$rb_pkg'..." >&2
+                    pkg_remove "$DB_PATH" "$rb_pkg" >/dev/null 2>&1 || true
+                done
+                echo "Full transaction rollback complete. System restored to pre-transaction state." >&2
+            fi
+            echo "==========================================================================" >&2
+        }
+
+        # Install dependencies in topological order
+        for ((p=0; p<deps_count; p++)); do
+            dep_item="$(echo "$plan_json" | jq -c ".[$p]")"
+            dep_name="$(echo "$dep_item" | jq -r '.name')"
+            dep_ver="$(echo "$dep_item" | jq -r '.version')"
+            dep_url="$(echo "$dep_item" | jq -r '.download_url')"
+            dep_cs="$(echo "$dep_item" | jq -r '.checksum')"
+
+            resolved_dep_url="$(repo_resolve_url "$REPO_URL" "$dep_url")"
+            TMP_DEP="$(mktemp 2>/dev/null || mktemp -t 'ravpkg-dep-XXXXXX.rav')"
+
+            echo "[TRANSACTION] ($((p+1))/$((deps_count+1))) Downloading dependency $dep_name ($dep_ver)..."
+            if ! repo_download_package "$resolved_dep_url" "$TMP_DEP"; then
+                echo "Error: failed to download dependency '$dep_name' from '$resolved_dep_url'" >&2
+                rm -f "$TMP_DEP"
+                _rollback_transaction "$dep_name"
                 exit 1
             fi
 
-            # Check 1: Verify downloaded file against repository index checksum BEFORE install
             if [[ "${RAVPKG_SKIP_VERIFY:-0}" != "1" ]]; then
-                if ! repo_verify_checksum "$TMP_PKG" "$idx_checksum"; then
-                    actual_dl_cs="$(_calc_sha256 "$TMP_PKG" | tr -d '\r')"
-                    echo "Error: checksum mismatch between downloaded package and repository index for '$TARGET_ARG'!" >&2
-                    echo "  Index checksum:      $idx_checksum" >&2
-                    echo "  Downloaded file:     $actual_dl_cs" >&2
-                    echo "Download rejected. Integrity cannot be verified." >&2
-                    _clean_tmp_pkg
-                    trap - EXIT INT TERM ERR
+                if ! repo_verify_checksum "$TMP_DEP" "$dep_cs"; then
+                    echo "Error: checksum mismatch between downloaded dependency '$dep_name' and index!" >&2
+                    rm -f "$TMP_DEP"
+                    _rollback_transaction "$dep_name"
+                    exit 1
+                fi
+                dep_manifest_cs="$(tar -xf "$TMP_DEP" -O manifest.json 2>/dev/null | jq -r '.checksum // empty' 2>/dev/null | tr -d '\r' || true)"
+                if [[ -n "$dep_manifest_cs" && -n "$dep_cs" && "$dep_manifest_cs" != "$dep_cs" ]]; then
+                    echo "Error: checksum disagreement between index and manifest for dependency '$dep_name'!" >&2
+                    rm -f "$TMP_DEP"
+                    _rollback_transaction "$dep_name"
                     exit 1
                 fi
             fi
 
-            # Check 2: Verify agreement between repository index checksum and package manifest checksum
-            manifest_cs="$(tar -xf "$TMP_PKG" -O manifest.json 2>/dev/null | jq -r '.checksum // empty' 2>/dev/null | tr -d '\r' || true)"
+            echo "[TRANSACTION] ($((p+1))/$((deps_count+1))) Installing dependency $dep_name ($dep_ver)..."
+            if ! pkg_install "$DB_PATH" "$TMP_DEP"; then
+                rm -f "$TMP_DEP"
+                _rollback_transaction "$dep_name"
+                exit 1
+            fi
+            rm -f "$TMP_DEP"
+            INSTALLED_IN_TRANSACTION+=("$dep_name")
+        done
+
+        # Install target package
+        if [[ "$is_file_target" -eq 1 ]]; then
+            echo "[TRANSACTION] ($((deps_count+1))/$((deps_count+1))) Installing target package $target_name ($target_ver)..."
+            if ! pkg_install "$DB_PATH" "$TARGET_ARG"; then
+                _rollback_transaction "$target_name"
+                exit 1
+            fi
+        else
+            resolved_target_url="$(repo_resolve_url "$REPO_URL" "$target_dl_url")"
+            TMP_TARGET="$(mktemp 2>/dev/null || mktemp -t 'ravpkg-target-XXXXXX.rav')"
+
+            echo "[TRANSACTION] ($((deps_count+1))/$((deps_count+1))) Downloading target package $target_name ($target_ver)..."
+            if ! repo_download_package "$resolved_target_url" "$TMP_TARGET"; then
+                echo "Error: failed to download target package '$target_name' from '$resolved_target_url'" >&2
+                rm -f "$TMP_TARGET"
+                _rollback_transaction "$target_name"
+                exit 1
+            fi
+
             if [[ "${RAVPKG_SKIP_VERIFY:-0}" != "1" ]]; then
-                if [[ -n "$manifest_cs" && -n "$idx_checksum" && "$manifest_cs" != "$idx_checksum" ]]; then
-                    echo "Error: checksum disagreement between repository index and package manifest for '$TARGET_ARG'!" >&2
-                    echo "  Repository index: $idx_checksum" >&2
-                    echo "  Package manifest: $manifest_cs" >&2
-                    echo "Installation rejected: repository index and manifest must agree." >&2
-                    _clean_tmp_pkg
-                    trap - EXIT INT TERM ERR
+                if ! repo_verify_checksum "$TMP_TARGET" "$target_idx_cs"; then
+                    echo "Error: checksum mismatch between downloaded target package '$target_name' and index!" >&2
+                    rm -f "$TMP_TARGET"
+                    _rollback_transaction "$target_name"
+                    exit 1
+                fi
+                target_manifest_cs="$(tar -xf "$TMP_TARGET" -O manifest.json 2>/dev/null | jq -r '.checksum // empty' 2>/dev/null | tr -d '\r' || true)"
+                if [[ -n "$target_manifest_cs" && -n "$target_idx_cs" && "$target_manifest_cs" != "$target_idx_cs" ]]; then
+                    echo "Error: checksum disagreement between index and manifest for target package '$target_name'!" >&2
+                    rm -f "$TMP_TARGET"
+                    _rollback_transaction "$target_name"
                     exit 1
                 fi
             fi
 
-            pkg_install "$DB_PATH" "$TMP_PKG"
-            inst_rc=$?
-
-            _clean_tmp_pkg
-            trap - EXIT INT TERM ERR
-            exit $inst_rc
+            echo "[TRANSACTION] ($((deps_count+1))/$((deps_count+1))) Installing target package $target_name ($target_ver)..."
+            if ! pkg_install "$DB_PATH" "$TMP_TARGET"; then
+                rm -f "$TMP_TARGET"
+                _rollback_transaction "$target_name"
+                exit 1
+            fi
+            rm -f "$TMP_TARGET"
         fi
         ;;
 

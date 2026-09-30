@@ -130,10 +130,17 @@ make test
 # Install a package from local archive or remote repository by name
 ./bin/ravpkg install ./sample-package.rav
 ./bin/ravpkg install ravterm                               # looks up in repo index, downloads, and installs
+./bin/ravpkg install ravterm -y                            # non-interactive: confirm transaction plan automatically
 ./bin/ravpkg install ravterm --no-cache                    # force fresh index fetch
 ./bin/ravpkg install ./sample-package.rav --root /opt/sandbox
 ./bin/ravpkg install ./sample-package.rav --skip-verify    # development/testing only
-./bin/ravpkg install ./sample-package.rav --no-deps
+./bin/ravpkg install ./sample-package.rav --no-deps        # bypass dependency checks
+
+When installing a package with missing dependencies from the repository, `ravpkg`
+automatically resolves sub-dependencies recursively, displays a Transaction Summary
+table, and prompts for confirmation. If any package fails mid-transaction, a full
+transaction rollback uninstalls any dependencies installed during that transaction in
+reverse order, restoring the system to its pre-transaction state.
 
 # Remove an installed package
 ./bin/ravpkg remove sample-package
