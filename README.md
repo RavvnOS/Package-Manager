@@ -1,8 +1,8 @@
 # ravpkg
 
-`ravpkg` is a minimal-viable package manager designed for **ravynOS** (a macOS-compatible open-source operating system built on a Darwin/FreeBSD userland).
+`ravpkg` is a minimal-viable package manager designed for **ravynOS** (a macOS-compatible open-source operating system built on Darwin/FreeBSD userland).
 
-This repository contains the **Phase 1–2 scaffolding**: package manifest schema, local SQLite database tracking, manifest parser with validation, and CLI command routing.
+This repository contains the **Phase 1–2 scaffolding** implemented in pure **Bash**, utilizing `sqlite3` for local database package tracking and `jq` for manifest parsing and validation.
 
 ---
 
@@ -25,72 +25,74 @@ This repository contains the **Phase 1–2 scaffolding**: package manifest schem
 
 ```text
 ravpkg/
-├── cmd/
-│   └── ravpkg/
-│       └── main.go             # CLI entrypoint with Cobra command routing
-├── internal/
-│   ├── db/
-│   │   ├── db.go               # SQLite CRUD operations (installed_packages table)
-│   │   └── db_test.go          # Unit tests using in-memory SQLite (:memory:)
-│   ├── model/
-│   │   └── manifest.go         # Manifest, InstalledPackage, and Dependency structs
-│   └── parser/
-│       ├── parser.go           # Manifest JSON parser and validator
-│       └── parser_test.go      # Unit tests for parser and error validation
-├── repo/
-│   ├── repo.go                 # Phase 4 repository/index tooling stub
-│   └── README.md               # Overview of future remote repository index
+├── bin/
+│   └── ravpkg                  # Main executable script, argument parser & command routing
+├── lib/
+│   ├── db.sh                   # sqlite3 wrapper functions (installed_packages table)
+│   └── parser.sh               # jq-based manifest JSON parser and validator
+├── schema/
+│   └── schema.sql              # SQLite table definitions (installed_packages)
 ├── tests/
-│   └── fixtures/
-│       ├── valid-manifest.json          # Example valid package manifest
-│       ├── with-deps-manifest.json      # Manifest with dependencies & multiple paths
-│       ├── missing-fields-manifest.json # Invalid manifest (missing required fields)
-│       └── bad-checksum-manifest.json   # Invalid manifest (malformed SHA256)
+│   ├── fixtures/
+│   │   ├── valid-manifest.json          # Example valid package manifest
+│   │   ├── with-deps-manifest.json      # Manifest with dependencies & multiple paths
+│   │   ├── missing-fields-manifest.json # Invalid manifest (missing required fields)
+│   │   └── bad-checksum-manifest.json   # Invalid manifest (malformed SHA256)
+│   ├── test_parser.bats        # bats tests for parser & validation rules
+│   ├── test_db.bats            # bats tests for SQLite CRUD operations
+│   └── run_tests.sh            # Standalone test runner (bats or native bash fallback)
 ├── docs/
 │   └── manifest-spec.md        # Formal specification for package manifest schema
-├── .gitignore                  # Build artifacts, SQLite files, OS files
-├── Makefile                    # Build, test, lint, and cross-compilation targets
-├── go.mod                      # Go module definition
-├── go.sum                      # Checksums for dependencies
+├── .gitignore                  # Git ignore rules for SQLite databases, temporary files
+├── install.sh                  # Installation script (copies ravpkg to /usr/local/bin)
+├── Makefile                    # Targets for test, install, clean
 └── README.md                   # Project documentation
 ```
 
 ---
 
-## Requirements
+## Prerequisites
 
-- **Go 1.21+** (Go 1.27+ tested)
-- No C compiler or CGO required (uses pure-Go SQLite via `modernc.org/sqlite`)
+- **Bash** (v4.0 or newer)
+- **sqlite3**
+- **jq** (for JSON manifest parsing and validation)
+- *(Optional)* **bats-core** (for running test suites)
 
 ---
 
-## Build & Test Instructions
+## Installation & Setup
 
-### Building the CLI
+No compilation or build step is required.
+
+### Quick Run
+Make `bin/ravpkg` executable and run it directly:
 ```bash
-# Using Go directly
-go build -o ravpkg ./cmd/ravpkg
-
-# Using Makefile
-make build
+chmod +x bin/ravpkg
+./bin/ravpkg --help
 ```
 
-### Running Unit Tests
+### System Installation
+Run the install script to copy `ravpkg` to `/usr/local/bin` and libraries to `/usr/local/lib/ravpkg`:
 ```bash
-# Run all unit tests with verbose output
-go test -v ./...
+sudo ./install.sh
+# or using Make
+sudo make install
+```
 
+---
+
+## Running Tests
+
+Run the test suite via the test runner:
+```bash
 # Using Makefile
 make test
-```
 
-### Cross-Compiling for ravynOS
-```bash
-# Target Darwin (amd64 / arm64)
-make build-darwin
+# Or directly with bash
+bash tests/run_tests.sh
 
-# Target FreeBSD userland (amd64)
-make build-freebsd
+# Or using bats directly (if installed)
+bats tests/test_*.bats
 ```
 
 ---
@@ -99,21 +101,21 @@ make build-freebsd
 
 ```bash
 # Show command help
-./ravpkg --help
+./bin/ravpkg --help
 
 # List installed packages
-./ravpkg list
+./bin/ravpkg list
 
 # View package info
-./ravpkg info ravterm
+./bin/ravpkg info ravterm
 
 # Specify a custom database path (useful for testing)
-./ravpkg --db ./test.db list
+./bin/ravpkg --db ./test.db list
 
 # Stubs
-./ravpkg install ./sample-package.rav
-./ravpkg remove sample-package
-./ravpkg search editor
+./bin/ravpkg install ./sample-package.rav
+./bin/ravpkg remove sample-package
+./bin/ravpkg search editor
 ```
 
 ---

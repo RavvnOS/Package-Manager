@@ -1,28 +1,14 @@
-BINARY_NAME=ravpkg
+PREFIX ?= /usr/local
 
-.PHONY: all build test clean fmt vet build-darwin build-freebsd
+.PHONY: all test install clean
 
-all: build
-
-build:
-	go build -o $(BINARY_NAME) ./cmd/ravpkg
+all: test
 
 test:
-	go test -v ./...
+	@bash tests/run_tests.sh
 
-fmt:
-	go fmt ./...
-
-vet:
-	go vet ./...
+install:
+	@PREFIX=$(PREFIX) bash install.sh
 
 clean:
-	rm -f $(BINARY_NAME) $(BINARY_NAME).exe *.db *.sqlite coverage.out
-
-# Cross-compilation targets for ravynOS targets (Darwin and FreeBSD userland)
-build-darwin:
-	GOOS=darwin GOARCH=amd64 go build -o bin/$(BINARY_NAME)-darwin-amd64 ./cmd/ravpkg
-	GOOS=darwin GOARCH=arm64 go build -o bin/$(BINARY_NAME)-darwin-arm64 ./cmd/ravpkg
-
-build-freebsd:
-	GOOS=freebsd GOARCH=amd64 go build -o bin/$(BINARY_NAME)-freebsd-amd64 ./cmd/ravpkg
+	rm -f *.db *.sqlite cli_test.db

@@ -1,0 +1,236 @@
+#!/usr/bin/env bash
+# bin/ravpkg - Main executable for ravynOS package manager
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+
+# Determine library directory location
+if [[ -f "$ROOT_DIR/lib/db.sh" ]]; then
+    LIB_DIR="$ROOT_DIR/lib"
+    SCHEMA_FILE="$ROOT_DIR/schema/schema.sql"
+elif [[ -f "/usr/local/lib/ravpkg/db.sh" ]]; then
+    LIB_DIR="/usr/local/lib/ravpkg"
+    SCHEMA_FILE="/usr/local/lib/ravpkg/schema.sql"
+elif [[ -f "/usr/lib/ravpkg/db.sh" ]]; then
+    LIB_DIR="/usr/lib/ravpkg"
+    SCHEMA_FILE="/usr/lib/ravpkg/schema.sql"
+else
+    echo "Error: unable to locate ravpkg libraries (lib/db.sh)" >&2
+    exit 1
+fi
+
+# Source core engine libraries
+# shellcheck source=lib/db.sh
+source "$LIB_DIR/db.sh"
+# shellcheck source=lib/parser.sh
+source "$LIB_DIR/parser.sh"
+
+# Pre-flight check: verify dependencies
+for tool in sqlite3 jq; do
+    if ! command -v "$tool" >/dev/null 2>&1; then
+        echo "Error: required dependency '$tool' is not installed or not in PATH." >&2
+        exit 1
+    fi
+done
+
+# Resolve default database path
+get_default_db_path() {
+    if [[ -n "${RAVPKG_DB:-}" ]]; then
+        echo "$RAVPKG_DB"
+        return
+    fi
+    # If /var/db/ravpkg exists or can be created by root, use standard ravynOS path
+    if [[ -w "/var/db" || -d "/var/db/ravpkg" ]]; then
+        echo "/var/db/ravpkg/pkg.db"
+    elif [[ -d "/var" && "$EUID" -eq 0 ]]; then
+        echo "/var/db/ravpkg/pkg.db"
+    else
+        echo "./ravpkg.db"
+    fi
+}
+
+show_help() {
+    cat <<'EOF'
+ravpkg is the native package manager for ravynOS, managing package
+installations, removals, queries, and system manifests.
+
+Phase 1-2 Scaffolding:
+- list: functional (reads local SQLite package DB)
+- info: functional (reads package metadata and file list)
+- install: stub (deferred to Phase 2)
+- remove: stub (deferred to Phase 2)
+- search: stub (deferred to Phase 4)
+
+Usage:
+  ravpkg [command]
+
+Available Commands:
+  help        Help about any command
+  info        Display details and installed files for a package [FUNCTIONAL]
+  install     Install a package archive onto the system [STUB]
+  list        List all installed packages [FUNCTIONAL]
+  remove      Remove an installed package from the system [STUB]
+  search      Search for packages in the remote repository [STUB]
+
+Flags:
+  -d, --db string   Path to SQLite database (default: /var/db/ravpkg/pkg.db or ./ravpkg.db)
+  -h, --help        help for ravpkg
+
+Use "ravpkg [command] --help" for more information about a command.
+EOF
+}
+
+# Parse global options
+DB_PATH=""
+ARGS=()
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -d|--db)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: flag needs an argument: --db" >&2
+                exit 1
+            fi
+            DB_PATH="$2"
+            shift 2
+            ;;
+        --db=*)
+            DB_PATH="${1#*=}"
+            shift
+            ;;
+        -h|--help)
+            show_help
+            exit 0
+            ;;
+        *)
+            ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [[ -z "$DB_PATH" ]]; then
+    DB_PATH="$(get_default_db_path)"
+fi
+
+if [[ ${#ARGS[@]} -eq 0 ]]; then
+    show_help
+    exit 0
+fi
+
+COMMAND="${ARGS[0]}"
+SUBARGS=("${ARGS[@]:1}")
+
+case "$COMMAND" in
+    help)
+        show_help
+        exit 0
+        ;;
+
+    list)
+        if [[ ${#SUBARGS[@]} -gt 0 && ("${SUBARGS[0]}" == "-h" || "${SUBARGS[0]}" == "--help") ]]; then
+            echo "List all installed packages [FUNCTIONAL]"
+            echo ""
+            echo "Usage:"
+            echo "  ravpkg list"
+            exit 0
+        fi
+
+        db_init "$DB_PATH" "$SCHEMA_FILE"
+        packages_json="$(db_list_packages "$DB_PATH")"
+
+        count="$(echo "$packages_json" | jq 'length' 2>/dev/null || echo 0)"
+        if [[ "$count" -eq 0 ]]; then
+            echo "No packages currently installed."
+            exit 0
+        fi
+
+        # Format tabular output
+        printf "%-15s %-10s %-20s %s\n" "NAME" "VERSION" "INSTALLED" "FILES"
+        echo "$packages_json" | jq -r '.[] | [
+            .name,
+            .version,
+            ((.install_date // "-") | sub("T"; " ") | sub("Z$"; "") | .[0:19]),
+            ((.installed_files | if type == "string" then (fromjson? // []) else . end) | length)
+        ] | @tsv' | while IFS=$'\t' read -r name version date files_len; do
+            printf "%-15s %-10s %-20s %s\n" "$name" "$version" "$date" "$files_len"
+        done
+        ;;
+
+    info)
+        if [[ ${#SUBARGS[@]} -eq 0 || "${SUBARGS[0]}" == "-h" || "${SUBARGS[0]}" == "--help" ]]; then
+            if [[ ${#SUBARGS[@]} -eq 0 ]]; then
+                echo "Error: accepts 1 arg(s), received 0" >&2
+            fi
+            echo "Usage: ravpkg info <package-name>" >&2
+            exit 1
+        fi
+
+        PKG_NAME="${SUBARGS[0]}"
+        db_init "$DB_PATH" "$SCHEMA_FILE"
+
+        if ! pkg_json="$(db_get_package "$DB_PATH" "$PKG_NAME" 2>/dev/null)"; then
+            echo "Error: package \"$PKG_NAME\" is not installed" >&2
+            exit 1
+        fi
+
+        name="$(echo "$pkg_json" | jq -r '.name')"
+        version="$(echo "$pkg_json" | jq -r '.version')"
+        date="$(echo "$pkg_json" | jq -r '.install_date')"
+        manifest="$(echo "$pkg_json" | jq -r '.manifest_path')"
+        files_str="$(echo "$pkg_json" | jq -r '.installed_files')"
+        file_count="$(echo "$files_str" | jq 'if type == "string" then (fromjson? // []) else . end | length' 2>/dev/null || echo 0)"
+
+        echo "Package:      $name"
+        echo "Version:      $version"
+        echo "Install Date: $date"
+        echo "Manifest:     $manifest"
+        echo "Files ($file_count):"
+        if [[ "$file_count" -gt 0 ]]; then
+            echo "$files_str" | jq -r 'if type == "string" then (fromjson? // []) else . end | .[]' | sed 's/^/  - /'
+        fi
+        ;;
+
+    install)
+        if [[ ${#SUBARGS[@]} -eq 0 || "${SUBARGS[0]}" == "-h" || "${SUBARGS[0]}" == "--help" ]]; then
+            if [[ ${#SUBARGS[@]} -eq 0 ]]; then
+                echo "Error: accepts 1 arg(s), received 0" >&2
+            fi
+            echo "Usage: ravpkg install <package-file>" >&2
+            exit 1
+        fi
+        PKG_FILE="${SUBARGS[0]}"
+        echo "[STUB] Not yet implemented: filesystem installation logic for \"$PKG_FILE\" is deferred to Phase 2."
+        ;;
+
+    remove)
+        if [[ ${#SUBARGS[@]} -eq 0 || "${SUBARGS[0]}" == "-h" || "${SUBARGS[0]}" == "--help" ]]; then
+            if [[ ${#SUBARGS[@]} -eq 0 ]]; then
+                echo "Error: accepts 1 arg(s), received 0" >&2
+            fi
+            echo "Usage: ravpkg remove <package-name>" >&2
+            exit 1
+        fi
+        PKG_NAME="${SUBARGS[0]}"
+        echo "[STUB] Not yet implemented: filesystem removal logic for \"$PKG_NAME\" is deferred to Phase 2."
+        ;;
+
+    search)
+        if [[ ${#SUBARGS[@]} -eq 0 || "${SUBARGS[0]}" == "-h" || "${SUBARGS[0]}" == "--help" ]]; then
+            if [[ ${#SUBARGS[@]} -eq 0 ]]; then
+                echo "Error: accepts 1 arg(s), received 0" >&2
+            fi
+            echo "Usage: ravpkg search <query>" >&2
+            exit 1
+        fi
+        QUERY="${SUBARGS[0]}"
+        echo "[STUB] Not yet implemented: repository search for \"$QUERY\" depends on Phase 4 repo tooling."
+        ;;
+
+    *)
+        echo "Error: unknown command \"$COMMAND\" for \"ravpkg\"" >&2
+        echo "Run 'ravpkg --help' for usage." >&2
+        exit 1
+        ;;
+esac
