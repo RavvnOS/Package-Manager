@@ -62,6 +62,28 @@ validate_manifest() {
               else empty end
             else empty end
           ][0] //
+          [ if .conflicts != null then
+              if (.conflicts | type != "array") then
+                "invalid 'conflicts': must be an array of strings"
+              else
+                (.conflicts | to_entries[]) |
+                if ((.value // "") | tostring | test("^\\s*$")) then
+                  "invalid conflict: conflicts[\(.key)] cannot be empty"
+                else empty end
+              end
+            else empty end
+          ][0] //
+          [ if .provides != null then
+              if (.provides | type != "array") then
+                "invalid 'provides': must be an array of strings"
+              else
+                (.provides | to_entries[]) |
+                if ((.value // "") | tostring | test("^\\s*$")) then
+                  "invalid provide: provides[\(.key)] cannot be empty"
+                else empty end
+              end
+            else empty end
+          ][0] //
           "OK"
         )
       end
@@ -116,4 +138,12 @@ manifest_get_checksum() {
 
 manifest_get_installed_files() {
     echo "$1" | jq -c '[.install_paths[].destination]'
+}
+
+manifest_get_conflicts() {
+    echo "$1" | jq -c '.conflicts // []'
+}
+
+manifest_get_provides() {
+    echo "$1" | jq -c '.provides // []'
 }

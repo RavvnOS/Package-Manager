@@ -38,6 +38,8 @@ The repository index root is a **JSON array** of package descriptor objects:
 | `download_url` | `string` | **Yes** | Absolute HTTP(S) or local file URL to download the `.rav` package archive. |
 | `checksum` | `string` | **Yes** | SHA-256 digest (64 hex characters) of the package payload or archive. |
 | `dependencies` | `array` | No | Array of `{name, constraint}` dependency requirements. |
+| `conflicts` | `array` | No | Array of conflicting package identifiers or virtual names. |
+| `provides` | `array` | No | Array of virtual package names satisfied by this package. |
 
 ---
 

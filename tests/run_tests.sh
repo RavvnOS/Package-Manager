@@ -59,6 +59,10 @@ assert_fail "malformed JSON returns error" validate_manifest "{not-json}"
 assert_fail "empty install_paths returns error" validate_manifest '{"name":"p","version":"1","description":"d","checksum":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","install_paths":[]}'
 assert_fail "empty source returns error" validate_manifest '{"name":"p","version":"1","description":"d","checksum":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","install_paths":[{"source":"","destination":"/bin/p"}]}'
 assert_fail "empty destination returns error" validate_manifest '{"name":"p","version":"1","description":"d","checksum":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","install_paths":[{"source":"bin/p","destination":""}]}'
+assert_ok "backward compatibility: manifest without conflicts/provides validates" validate_manifest '{"name":"legacy","version":"1.0.0","description":"legacy","checksum":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","install_paths":[{"source":"bin/l","destination":"/usr/local/bin/l"}]}'
+assert_ok "manifest with valid conflicts and provides validates" validate_manifest '{"name":"modern","version":"1.0.0","description":"modern","checksum":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","install_paths":[{"source":"bin/m","destination":"/usr/local/bin/m"}],"conflicts":["badpkg"],"provides":["editor","vim"]}'
+assert_fail "invalid conflicts (not an array) returns error" validate_manifest '{"name":"badconf","version":"1.0.0","description":"desc","checksum":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","install_paths":[{"source":"bin/b","destination":"/usr/local/bin/b"}],"conflicts":"not-array"}'
+assert_fail "invalid provides (empty string element) returns error" validate_manifest '{"name":"badprov","version":"1.0.0","description":"desc","checksum":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","install_paths":[{"source":"bin/b","destination":"/usr/local/bin/b"}],"provides":["valid",""]}'
 
 echo ""
 echo "--- Database CRUD Tests ---"
@@ -1119,6 +1123,236 @@ else
     FAILED=$((FAILED + 1))
 fi
 
+echo ""
+echo "--- Package Conflicts & Virtual Packages (Provides) Tests ---"
+CP_TMP="$(mktemp -d 2>/dev/null || mktemp -d -t 'ravpkg-cp-XXXXXX')"
+CP_SANDBOX="$CP_TMP/sandbox"
+CP_DB="$CP_TMP/test.db"
+mkdir -p "$CP_SANDBOX"
+
+# 1. Base package origApp
+mkdir -p "$CP_TMP/orig_build/bin"
+echo "orig" > "$CP_TMP/orig_build/bin/orig"
+ORIG_CS="$(_calc_sha256 "$CP_TMP/orig_build/bin/orig")"
+cat <<EOF > "$CP_TMP/orig_build/manifest.json"
+{
+  "name": "origApp",
+  "version": "1.0.0",
+  "description": "Original App",
+  "checksum": "$ORIG_CS",
+  "install_paths": [
+    { "source": "bin/orig", "destination": "/usr/local/bin/orig" }
+  ],
+  "dependencies": []
+}
+EOF
+ORIG_PKG="$CP_TMP/origApp-1.0.0.rav"
+(cd "$CP_TMP/orig_build" && tar -czf "$ORIG_PKG" manifest.json bin/orig)
+assert_ok "install base package origApp" "$ROOT_DIR/bin/ravpkg" --root "$CP_SANDBOX" --db "$CP_DB" install "$ORIG_PKG"
+
+# 2. Package conflictApp declaring conflicts with origApp
+mkdir -p "$CP_TMP/conf_build/bin"
+echo "conf" > "$CP_TMP/conf_build/bin/conf"
+CONF_CS="$(_calc_sha256 "$CP_TMP/conf_build/bin/conf")"
+cat <<EOF > "$CP_TMP/conf_build/manifest.json"
+{
+  "name": "conflictApp",
+  "version": "1.0.0",
+  "description": "Conflicting App",
+  "checksum": "$CONF_CS",
+  "install_paths": [
+    { "source": "bin/conf", "destination": "/usr/local/bin/conf" }
+  ],
+  "conflicts": [
+    "origApp"
+  ]
+}
+EOF
+CONF_PKG="$CP_TMP/conflictApp-1.0.0.rav"
+(cd "$CP_TMP/conf_build" && tar -czf "$CONF_PKG" manifest.json bin/conf)
+assert_fail "install blocked by conflicting installed package" "$ROOT_DIR/bin/ravpkg" --root "$CP_SANDBOX" --db "$CP_DB" install "$CONF_PKG"
+if [[ ! -f "$CP_SANDBOX/usr/local/bin/conf" ]]; then
+    echo "  [PASS] conflicting package files not installed on filesystem"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] conflicting package deployed files to filesystem"
+    FAILED=$((FAILED + 1))
+fi
+
+# 3. Reverse direction: installed package guardPkg declares conflicts with blockedPkg
+mkdir -p "$CP_TMP/guard_build/bin"
+echo "guard" > "$CP_TMP/guard_build/bin/guard"
+GUARD_CS="$(_calc_sha256 "$CP_TMP/guard_build/bin/guard")"
+cat <<EOF > "$CP_TMP/guard_build/manifest.json"
+{
+  "name": "guardPkg",
+  "version": "1.0.0",
+  "description": "Guard Package",
+  "checksum": "$GUARD_CS",
+  "install_paths": [
+    { "source": "bin/guard", "destination": "/usr/local/bin/guard" }
+  ],
+  "conflicts": [
+    "blockedPkg"
+  ]
+}
+EOF
+GUARD_PKG="$CP_TMP/guardPkg-1.0.0.rav"
+(cd "$CP_TMP/guard_build" && tar -czf "$GUARD_PKG" manifest.json bin/guard)
+assert_ok "install guardPkg" "$ROOT_DIR/bin/ravpkg" --root "$CP_SANDBOX" --db "$CP_DB" install "$GUARD_PKG"
+
+mkdir -p "$CP_TMP/blocked_build/bin"
+echo "blocked" > "$CP_TMP/blocked_build/bin/blocked"
+BLOCKED_CS="$(_calc_sha256 "$CP_TMP/blocked_build/bin/blocked")"
+cat <<EOF > "$CP_TMP/blocked_build/manifest.json"
+{
+  "name": "blockedPkg",
+  "version": "1.0.0",
+  "description": "Blocked Package",
+  "checksum": "$BLOCKED_CS",
+  "install_paths": [
+    { "source": "bin/blocked", "destination": "/usr/local/bin/blocked" }
+  ]
+}
+EOF
+BLOCKED_PKG="$CP_TMP/blockedPkg-1.0.0.rav"
+(cd "$CP_TMP/blocked_build" && tar -czf "$BLOCKED_PKG" manifest.json bin/blocked)
+assert_fail "reverse conflict: install blocked by existing package conflict list" "$ROOT_DIR/bin/ravpkg" --root "$CP_SANDBOX" --db "$CP_DB" install "$BLOCKED_PKG"
+if [[ ! -f "$CP_SANDBOX/usr/local/bin/blocked" ]]; then
+    echo "  [PASS] reverse conflicting package files not installed"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] reverse conflicting package files installed"
+    FAILED=$((FAILED + 1))
+fi
+
+# 4. Dependency satisfied via installed package's "provides"
+mkdir -p "$CP_TMP/prov_build/bin"
+echo "vimgtk" > "$CP_TMP/prov_build/bin/vimgtk"
+PROV_CS="$(_calc_sha256 "$CP_TMP/prov_build/bin/vimgtk")"
+cat <<EOF > "$CP_TMP/prov_build/manifest.json"
+{
+  "name": "vim-gtk",
+  "version": "2.0.0",
+  "description": "Vim GTK GUI",
+  "checksum": "$PROV_CS",
+  "install_paths": [
+    { "source": "bin/vimgtk", "destination": "/usr/local/bin/vimgtk" }
+  ],
+  "provides": [
+    "vim",
+    "editor"
+  ]
+}
+EOF
+PROV_PKG="$CP_TMP/vim-gtk-2.0.0.rav"
+(cd "$CP_TMP/prov_build" && tar -czf "$PROV_PKG" manifest.json bin/vimgtk)
+assert_ok "install provider package vim-gtk" "$ROOT_DIR/bin/ravpkg" --root "$CP_SANDBOX" --db "$CP_DB" install "$PROV_PKG"
+
+mkdir -p "$CP_TMP/client_build/bin"
+echo "client" > "$CP_TMP/client_build/bin/client"
+CLIENT_CS="$(_calc_sha256 "$CP_TMP/client_build/bin/client")"
+cat <<EOF > "$CP_TMP/client_build/manifest.json"
+{
+  "name": "writerApp",
+  "version": "1.0.0",
+  "description": "Writer App",
+  "checksum": "$CLIENT_CS",
+  "install_paths": [
+    { "source": "bin/client", "destination": "/usr/local/bin/client" }
+  ],
+  "dependencies": [
+    { "name": "editor", "constraint": ">=1.0.0" }
+  ]
+}
+EOF
+CLIENT_PKG="$CP_TMP/writerApp-1.0.0.rav"
+(cd "$CP_TMP/client_build" && tar -czf "$CLIENT_PKG" manifest.json bin/client)
+assert_ok "dependency satisfied via provides match (writerApp requires editor -> vim-gtk provides it)" "$ROOT_DIR/bin/ravpkg" --root "$CP_SANDBOX" --db "$CP_DB" install "$CLIENT_PKG"
+if [[ -f "$CP_SANDBOX/usr/local/bin/client" ]]; then
+    echo "  [PASS] client package installed successfully via provided virtual dependency"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] client package not installed"
+    FAILED=$((FAILED + 1))
+fi
+
+# 5. Dependency satisfied via repository index "provides" in transaction
+mkdir -p "$CP_TMP/nano_build/bin"
+echo "nano" > "$CP_TMP/nano_build/bin/nano"
+NANO_CS="$(_calc_sha256 "$CP_TMP/nano_build/bin/nano")"
+cat <<EOF > "$CP_TMP/nano_build/manifest.json"
+{
+  "name": "nano-editor",
+  "version": "1.5.0",
+  "description": "Nano editor",
+  "checksum": "$NANO_CS",
+  "install_paths": [
+    { "source": "bin/nano", "destination": "/usr/local/bin/nano" }
+  ],
+  "provides": [
+    "simple-editor"
+  ]
+}
+EOF
+NANO_PKG="$CP_TMP/nano-editor-1.5.0.rav"
+(cd "$CP_TMP/nano_build" && tar -czf "$NANO_PKG" manifest.json bin/nano)
+
+mkdir -p "$CP_TMP/note_build/bin"
+echo "note" > "$CP_TMP/note_build/bin/note"
+NOTE_CS="$(_calc_sha256 "$CP_TMP/note_build/bin/note")"
+cat <<EOF > "$CP_TMP/note_build/manifest.json"
+{
+  "name": "noteApp",
+  "version": "1.0.0",
+  "description": "Note App",
+  "checksum": "$NOTE_CS",
+  "install_paths": [
+    { "source": "bin/note", "destination": "/usr/local/bin/note" }
+  ],
+  "dependencies": [
+    { "name": "simple-editor", "constraint": ">=1.0.0" }
+  ]
+}
+EOF
+NOTE_PKG="$CP_TMP/noteApp-1.0.0.rav"
+(cd "$CP_TMP/note_build" && tar -czf "$NOTE_PKG" manifest.json bin/note)
+
+VIRT_INDEX="$CP_TMP/virt_index.json"
+cat <<EOF > "$VIRT_INDEX"
+[
+  {
+    "name": "nano-editor",
+    "version": "1.5.0",
+    "description": "Nano editor",
+    "download_url": "file://$NANO_PKG",
+    "checksum": "$NANO_CS",
+    "dependencies": [],
+    "provides": ["simple-editor"]
+  },
+  {
+    "name": "noteApp",
+    "version": "1.0.0",
+    "description": "Note App",
+    "download_url": "file://$NOTE_PKG",
+    "checksum": "$NOTE_CS",
+    "dependencies": [
+      { "name": "simple-editor", "constraint": ">=1.0.0" }
+    ]
+  }
+]
+EOF
+
+assert_ok "repo transaction resolves dependency via provides" "$ROOT_DIR/bin/ravpkg" --root "$CP_SANDBOX" --db "$CP_DB" --repo "$VIRT_INDEX" --cache "$CP_TMP/virt_cache.json" --no-cache -y install noteApp
+if [[ -f "$CP_SANDBOX/usr/local/bin/nano" && -f "$CP_SANDBOX/usr/local/bin/note" ]]; then
+    echo "  [PASS] repository provides resolution installed both provider and consumer"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] repository provides resolution failed to install files"
+    FAILED=$((FAILED + 1))
+fi
+
+rm -rf "$CP_TMP"
 rm -rf "$TR_TMP"
 
 echo ""

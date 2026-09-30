@@ -127,6 +127,13 @@ pkg_install() {
         return 1
     fi
 
+    # 3.2 Check package conflicts with currently installed packages
+    if ! check_package_conflicts "$manifest_json" "$db_path" "$root_prefix"; then
+        rm -rf "$STAGE_DIR"
+        trap - ERR
+        return 1
+    fi
+
     # 3.5 Check package dependencies (unless --no-deps is passed)
     if [[ "${RAVPKG_NO_DEPS:-0}" != "1" ]]; then
         if ! check_package_dependencies "$manifest_json" "$db_path" "$root_prefix"; then

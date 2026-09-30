@@ -785,3 +785,240 @@ EOF
     run db_get_package "$TEST_DB" "rbBase"
     [ "$status" -ne 0 ]
 }
+
+@test "deps: install blocked by a conflicting installed package" {
+    # 1. Install base package origApp
+    ORIG_BUILD="$TEST_TMP/orig_build"
+    mkdir -p "$ORIG_BUILD/bin"
+    echo "orig" > "$ORIG_BUILD/bin/orig"
+    ORIG_CS="$(cat "$ORIG_BUILD/bin/orig" | _calc_sha256 -)"
+    cat <<EOF > "$ORIG_BUILD/manifest.json"
+{
+  "name": "origApp",
+  "version": "1.0.0",
+  "description": "Original App",
+  "checksum": "$ORIG_CS",
+  "install_paths": [
+    { "source": "bin/orig", "destination": "/usr/local/bin/orig" }
+  ],
+  "dependencies": []
+}
+EOF
+    ORIG_PKG="$TEST_TMP/origApp-1.0.0.rav"
+    (cd "$ORIG_BUILD" && tar -czf "$ORIG_PKG" manifest.json bin/orig)
+    run "$ROOT_DIR/bin/ravpkg" --root "$SANDBOX" --db "$TEST_DB" install "$ORIG_PKG"
+    [ "$status" -eq 0 ]
+
+    # 2. Package declaring conflict with origApp
+    CONF_BUILD="$TEST_TMP/conf_build"
+    mkdir -p "$CONF_BUILD/bin"
+    echo "conf" > "$CONF_BUILD/bin/conf"
+    CONF_CS="$(cat "$CONF_BUILD/bin/conf" | _calc_sha256 -)"
+    cat <<EOF > "$CONF_BUILD/manifest.json"
+{
+  "name": "conflictApp",
+  "version": "1.0.0",
+  "description": "Conflicting App",
+  "checksum": "$CONF_CS",
+  "install_paths": [
+    { "source": "bin/conf", "destination": "/usr/local/bin/conf" }
+  ],
+  "conflicts": [
+    "origApp"
+  ]
+}
+EOF
+    CONF_PKG="$TEST_TMP/conflictApp-1.0.0.rav"
+    (cd "$CONF_BUILD" && tar -czf "$CONF_PKG" manifest.json bin/conf)
+
+    run "$ROOT_DIR/bin/ravpkg" --root "$SANDBOX" --db "$TEST_DB" install "$CONF_PKG"
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "package 'conflictApp' cannot be installed due to package conflicts" ]]
+    [[ "$output" =~ "conflicts with installed package 'origApp'" ]]
+    [ ! -f "$SANDBOX/usr/local/bin/conf" ]
+
+    # 3. Reverse direction: installed package declares conflict with incoming package
+    REV_BUILD="$TEST_TMP/rev_build"
+    mkdir -p "$REV_BUILD/bin"
+    echo "rev" > "$REV_BUILD/bin/rev"
+    REV_CS="$(cat "$REV_BUILD/bin/rev" | _calc_sha256 -)"
+    cat <<EOF > "$REV_BUILD/manifest.json"
+{
+  "name": "guardPkg",
+  "version": "1.0.0",
+  "description": "Guard Package",
+  "checksum": "$REV_CS",
+  "install_paths": [
+    { "source": "bin/rev", "destination": "/usr/local/bin/rev" }
+  ],
+  "conflicts": [
+    "blockedPkg"
+  ]
+}
+EOF
+    REV_PKG="$TEST_TMP/guardPkg-1.0.0.rav"
+    (cd "$REV_BUILD" && tar -czf "$REV_PKG" manifest.json bin/rev)
+    run "$ROOT_DIR/bin/ravpkg" --root "$SANDBOX" --db "$TEST_DB" install "$REV_PKG"
+    [ "$status" -eq 0 ]
+
+    # Now attempt to install blockedPkg (which doesn't list guardPkg, but guardPkg lists blockedPkg)
+    BLOCKED_BUILD="$TEST_TMP/blocked_build"
+    mkdir -p "$BLOCKED_BUILD/bin"
+    echo "blocked" > "$BLOCKED_BUILD/bin/blocked"
+    BLOCKED_CS="$(cat "$BLOCKED_BUILD/bin/blocked" | _calc_sha256 -)"
+    cat <<EOF > "$BLOCKED_BUILD/manifest.json"
+{
+  "name": "blockedPkg",
+  "version": "1.0.0",
+  "description": "Blocked Package",
+  "checksum": "$BLOCKED_CS",
+  "install_paths": [
+    { "source": "bin/blocked", "destination": "/usr/local/bin/blocked" }
+  ]
+}
+EOF
+    BLOCKED_PKG="$TEST_TMP/blockedPkg-1.0.0.rav"
+    (cd "$BLOCKED_BUILD" && tar -czf "$BLOCKED_PKG" manifest.json bin/blocked)
+
+    run "$ROOT_DIR/bin/ravpkg" --root "$SANDBOX" --db "$TEST_DB" install "$BLOCKED_PKG"
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "package 'blockedPkg' cannot be installed due to package conflicts" ]]
+    [[ "$output" =~ "installed package 'guardPkg'" ]]
+    [ ! -f "$SANDBOX/usr/local/bin/blocked" ]
+}
+
+@test "deps: dependency satisfied via a 'provides' match rather than exact name" {
+    # 1. Install provider package (e.g. vim-gtk providing vim and editor)
+    PROV_BUILD="$TEST_TMP/prov_build"
+    mkdir -p "$PROV_BUILD/bin"
+    echo "vimgtk" > "$PROV_BUILD/bin/vimgtk"
+    PROV_CS="$(cat "$PROV_BUILD/bin/vimgtk" | _calc_sha256 -)"
+    cat <<EOF > "$PROV_BUILD/manifest.json"
+{
+  "name": "vim-gtk",
+  "version": "2.0.0",
+  "description": "Vim GTK GUI",
+  "checksum": "$PROV_CS",
+  "install_paths": [
+    { "source": "bin/vimgtk", "destination": "/usr/local/bin/vimgtk" }
+  ],
+  "provides": [
+    "vim",
+    "editor"
+  ]
+}
+EOF
+    PROV_PKG="$TEST_TMP/vim-gtk-2.0.0.rav"
+    (cd "$PROV_BUILD" && tar -czf "$PROV_PKG" manifest.json bin/vimgtk)
+    run "$ROOT_DIR/bin/ravpkg" --root "$SANDBOX" --db "$TEST_DB" install "$PROV_PKG"
+    [ "$status" -eq 0 ]
+
+    # 2. Package client depending on virtual capability "editor"
+    CLIENT_BUILD="$TEST_TMP/client_build"
+    mkdir -p "$CLIENT_BUILD/bin"
+    echo "client" > "$CLIENT_BUILD/bin/client"
+    CLIENT_CS="$(cat "$CLIENT_BUILD/bin/client" | _calc_sha256 -)"
+    cat <<EOF > "$CLIENT_BUILD/manifest.json"
+{
+  "name": "writerApp",
+  "version": "1.0.0",
+  "description": "Writer Application",
+  "checksum": "$CLIENT_CS",
+  "install_paths": [
+    { "source": "bin/client", "destination": "/usr/local/bin/client" }
+  ],
+  "dependencies": [
+    { "name": "editor", "constraint": ">=1.0.0" }
+  ]
+}
+EOF
+    CLIENT_PKG="$TEST_TMP/writerApp-1.0.0.rav"
+    (cd "$CLIENT_BUILD" && tar -czf "$CLIENT_PKG" manifest.json bin/client)
+
+    run "$ROOT_DIR/bin/ravpkg" --root "$SANDBOX" --db "$TEST_DB" install "$CLIENT_PKG"
+    [ "$status" -eq 0 ]
+    [ -f "$SANDBOX/usr/local/bin/client" ]
+}
+
+@test "deps: repository resolution satisfies dependency via 'provides' match in transaction" {
+    INDEX_FILE="$TEST_TMP/virt_index.json"
+    CACHE_FILE="$TEST_TMP/virt_cache.json"
+
+    # Provider package in repo: nano-editor providing "editor"
+    NANO_BUILD="$TEST_TMP/nano_build"
+    mkdir -p "$NANO_BUILD/bin"
+    echo "nano" > "$NANO_BUILD/bin/nano"
+    NANO_CS="$(cat "$NANO_BUILD/bin/nano" | _calc_sha256 -)"
+    cat <<EOF > "$NANO_BUILD/manifest.json"
+{
+  "name": "nano-editor",
+  "version": "1.5.0",
+  "description": "Nano text editor",
+  "checksum": "$NANO_CS",
+  "install_paths": [
+    { "source": "bin/nano", "destination": "/usr/local/bin/nano" }
+  ],
+  "provides": [
+    "editor"
+  ]
+}
+EOF
+    NANO_PKG="$TEST_TMP/nano-editor-1.5.0.rav"
+    (cd "$NANO_BUILD" && tar -czf "$NANO_PKG" manifest.json bin/nano)
+
+    # Consumer package in repo: gitApp requiring "editor"
+    GIT_BUILD="$TEST_TMP/git_build"
+    mkdir -p "$GIT_BUILD/bin"
+    echo "git" > "$GIT_BUILD/bin/git"
+    GIT_CS="$(cat "$GIT_BUILD/bin/git" | _calc_sha256 -)"
+    cat <<EOF > "$GIT_BUILD/manifest.json"
+{
+  "name": "gitApp",
+  "version": "1.0.0",
+  "description": "Git VCS app",
+  "checksum": "$GIT_CS",
+  "install_paths": [
+    { "source": "bin/git", "destination": "/usr/local/bin/git" }
+  ],
+  "dependencies": [
+    { "name": "editor", "constraint": ">=1.0.0" }
+  ]
+}
+EOF
+    GIT_PKG="$TEST_TMP/gitApp-1.0.0.rav"
+    (cd "$GIT_BUILD" && tar -czf "$GIT_PKG" manifest.json bin/git)
+
+    cat <<EOF > "$INDEX_FILE"
+[
+  {
+    "name": "nano-editor",
+    "version": "1.5.0",
+    "description": "Nano text editor",
+    "download_url": "file://$NANO_PKG",
+    "checksum": "$NANO_CS",
+    "dependencies": [],
+    "provides": ["editor"]
+  },
+  {
+    "name": "gitApp",
+    "version": "1.0.0",
+    "description": "Git VCS app",
+    "download_url": "file://$GIT_PKG",
+    "checksum": "$GIT_CS",
+    "dependencies": [
+      { "name": "editor", "constraint": ">=1.0.0" }
+    ]
+  }
+]
+EOF
+
+    run "$ROOT_DIR/bin/ravpkg" --root "$SANDBOX" --db "$TEST_DB" --repo "$INDEX_FILE" --cache "$CACHE_FILE" --no-cache -y install gitApp
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Transaction Summary" ]]
+    [[ "$output" =~ "nano-editor" ]]
+
+    # Both nano and git should be installed
+    [ -f "$SANDBOX/usr/local/bin/nano" ]
+    [ -f "$SANDBOX/usr/local/bin/git" ]
+}
+

@@ -362,6 +362,11 @@ case "$COMMAND" in
             fi
         fi
 
+        # Check package conflicts with currently installed packages
+        if ! check_package_conflicts "$target_manifest" "$DB_PATH" "${RAVPKG_ROOT:-}"; then
+            exit 1
+        fi
+
         # Build install plan for missing dependencies
         plan_json="[]"
         deps_count=0

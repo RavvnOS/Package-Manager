@@ -113,6 +113,8 @@ else
         local_description="$(jq -r '.description // ""' "$mf" 2>/dev/null | tr -d '\r')"
         local_download_url="$(jq -r '.download_url // empty' "$mf" 2>/dev/null | tr -d '\r')"
         local_deps="$(jq -c '.dependencies // []' "$mf" 2>/dev/null || echo "[]")"
+        local_conflicts="$(jq -c '.conflicts // []' "$mf" 2>/dev/null || echo "[]")"
+        local_provides="$(jq -c '.provides // []' "$mf" 2>/dev/null || echo "[]")"
 
         if [[ -z "$local_name" || -z "$local_version" || -z "$local_checksum" ]]; then
             echo "Warning: skipping incomplete manifest (missing name/version/checksum): $mf" >&2
@@ -136,7 +138,9 @@ else
             --arg dl "$local_download_url" \
             --arg cs "$local_checksum" \
             --argjson deps "$local_deps" \
-            '{name: $name, version: $version, description: $desc, download_url: $dl, checksum: $cs, dependencies: $deps}')"
+            --argjson conflicts "$local_conflicts" \
+            --argjson provides "$local_provides" \
+            '{name: $name, version: $version, description: $desc, download_url: $dl, checksum: $cs, dependencies: $deps, conflicts: $conflicts, provides: $provides}')"
 
         entries+=("$entry")
     done

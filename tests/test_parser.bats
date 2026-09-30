@@ -80,3 +80,38 @@ setup() {
     [ "$status" -ne 0 ]
     [[ "$output" =~ "destination" ]]
 }
+
+@test "parser: backward compatibility - existing manifest without conflicts/provides validates" {
+    json='{"name":"legacy","version":"1.0.0","description":"legacy package","checksum":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","install_paths":[{"source":"bin/l","destination":"/usr/local/bin/l"}]}'
+    run validate_manifest "$json"
+    [ "$status" -eq 0 ]
+    conflicts="$(manifest_get_conflicts "$json")"
+    provides="$(manifest_get_provides "$json")"
+    [ "$conflicts" = "[]" ]
+    [ "$provides" = "[]" ]
+}
+
+@test "parser: manifest with valid conflicts and provides validates" {
+    json='{"name":"modern","version":"1.0.0","description":"modern pkg","checksum":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","install_paths":[{"source":"bin/m","destination":"/usr/local/bin/m"}],"conflicts":["badpkg","oldpkg"],"provides":["editor","vi"]}'
+    run validate_manifest "$json"
+    [ "$status" -eq 0 ]
+    conflicts="$(manifest_get_conflicts "$json")"
+    provides="$(manifest_get_provides "$json")"
+    [ "$conflicts" = '["badpkg","oldpkg"]' ]
+    [ "$provides" = '["editor","vi"]' ]
+}
+
+@test "parser: invalid conflicts (not an array) returns error" {
+    json='{"name":"badconf","version":"1.0.0","description":"desc","checksum":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","install_paths":[{"source":"bin/b","destination":"/usr/local/bin/b"}],"conflicts":"not-array"}'
+    run validate_manifest "$json"
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "conflicts" ]]
+}
+
+@test "parser: invalid provides (empty string element) returns error" {
+    json='{"name":"badprov","version":"1.0.0","description":"desc","checksum":"e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855","install_paths":[{"source":"bin/b","destination":"/usr/local/bin/b"}],"provides":["valid",""]}'
+    run validate_manifest "$json"
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "provides" ]]
+}
+

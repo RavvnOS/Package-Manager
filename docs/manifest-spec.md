@@ -25,7 +25,9 @@ A valid `manifest.json` root object contains the following fields:
 | `description` | `string` | **Yes** | Brief human-readable summary of the package. |
 | `checksum` | `string` | **Yes** | SHA-256 hex digest (exactly 64 hexadecimal characters) of the package payload or archive. |
 | `install_paths` | `array[object]` | **Yes** | List of source-to-destination file mapping definitions. Must contain at least one item. |
-| `dependencies` | `array[object]` | No | List of prerequisite packages with version constraints. Schema-only in Phase 1-2. |
+| `dependencies` | `array[object]` | No | List of prerequisite packages with version constraints. |
+| `conflicts` | `array[string]` | No | List of package identifiers or virtual names this package cannot coexist with. |
+| `provides` | `array[string]` | No | List of virtual package names or features this package satisfies (e.g. `vim` provided by `vim-gtk`). |
 
 ---
 
@@ -69,6 +71,38 @@ The `checksum` string must match standard SHA-256 formatting:
 
 ---
 
+### 2.4. `conflicts` Array
+
+Specifies packages or virtual capabilities with which this package cannot coexist. Installation will be rejected if any package named in `conflicts` (or providing a conflicting virtual name) is already installed, or if an installed package lists this package in its `conflicts`:
+
+```json
+"conflicts": [
+  "vim-tiny",
+  "vi"
+]
+```
+
+- **Type:** `array[string]` (optional).
+- Each item must be a non-empty string.
+
+---
+
+### 2.5. `provides` Array
+
+Specifies virtual package names or abstract capabilities satisfied by this package. When resolving dependencies, `ravpkg` checks both package names and `provides` declarations:
+
+```json
+"provides": [
+  "editor",
+  "vim"
+]
+```
+
+- **Type:** `array[string]` (optional).
+- Each item must be a non-empty string.
+
+---
+
 ## 3. Example Manifest (JSON)
 
 ```json
@@ -92,6 +126,12 @@ The `checksum` string must match standard SHA-256 formatting:
       "name": "libcoregraphics",
       "constraint": ">=0.4.0"
     }
+  ],
+  "conflicts": [
+    "ravterm-legacy"
+  ],
+  "provides": [
+    "terminal-emulator"
   ]
 }
 ```
@@ -100,8 +140,10 @@ The `checksum` string must match standard SHA-256 formatting:
 
 ## 4. Error Conditions
 
-The manifest parser (`internal/parser`) enforces these rules:
+The manifest parser (`lib/parser.sh`) enforces these rules:
 1. **Missing Required Field:** Returns an error specifying which required key (`name`, `version`, `description`, `checksum`, `install_paths`) is absent or empty.
 2. **Invalid Checksum:** Returns an error if the checksum is not a valid 64-character hexadecimal SHA-256 string.
 3. **Empty Install Paths:** Returns an error if `install_paths` is empty or if any item has an empty `source` or `destination`.
-4. **Malformed Syntax:** Returns a parse error if JSON is structurally malformed.
+4. **Invalid Conflicts:** Returns an error if `conflicts` is present but is not an array of non-empty strings.
+5. **Invalid Provides:** Returns an error if `provides` is present but is not an array of non-empty strings.
+6. **Malformed Syntax:** Returns a parse error if JSON is structurally malformed.
