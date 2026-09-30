@@ -4,6 +4,19 @@ set -euo pipefail
 
 DEFAULT_REPO_URL="https://repo.ravynos.com/index.json"
 
+if ! declare -f _calc_sha256 >/dev/null 2>&1; then
+    _calc_sha256() {
+        if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$@" | awk '{print $1}'
+        elif command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "$@" | awk '{print $1}'
+        else
+            echo "Error: neither sha256sum nor shasum found" >&2
+            return 1
+        fi
+    }
+fi
+
 # Resolve default repository cache file location
 repo_get_default_cache_path() {
     if [[ -n "${RAVPKG_REPO_CACHE:-}" ]]; then
@@ -160,4 +173,146 @@ repo_search() {
         printf "%-18s %-10s %s\n" "$name" "$ver" "$desc"
     done
     return 0
+}
+
+# Look up a package by exact name in index JSON (returns JSON object for latest version)
+repo_lookup_package() {
+    local index_cache="$1"
+    local pkg_name="$2"
+
+    if [[ ! -f "$index_cache" || ! -r "$index_cache" ]]; then
+        echo "Error: repository index is missing or unreadable: $index_cache" >&2
+        return 1
+    fi
+
+    local entry
+    entry="$(jq -c --arg name "$pkg_name" '[.[] | select(.name == $name)] | sort_by(.version) | reverse | .[0] // empty' "$index_cache" 2>/dev/null || true)"
+    if [[ -z "$entry" || "$entry" == "null" ]]; then
+        return 1
+    fi
+    echo "$entry"
+    return 0
+}
+
+# Resolve relative download URL against base repository URL or file path
+repo_resolve_url() {
+    local base_url="$1"
+    local dl_url="$2"
+
+    # Absolute URL with scheme (http://, https://, file://, etc.)
+    if [[ "$dl_url" == *"://"* ]]; then
+        echo "$dl_url"
+        return 0
+    fi
+
+    # Absolute POSIX or Windows path
+    if [[ "$dl_url" == /* || "$dl_url" =~ ^[a-zA-Z]: ]]; then
+        echo "$dl_url"
+        return 0
+    fi
+
+    # dl_url is relative: resolve against base_url directory
+    local base_dir
+    if [[ "$base_url" == *"/"* ]]; then
+        base_dir="${base_url%/*}"
+    else
+        base_dir="."
+    fi
+
+    echo "${base_dir%/}/${dl_url#/}"
+}
+
+# Download a package file to target destination (supports HTTP, HTTPS, file://, or local path)
+repo_download_package() {
+    local url="$1"
+    local dest="$2"
+
+    local target_dir
+    target_dir="$(dirname "$dest")"
+    mkdir -p "$target_dir" 2>/dev/null || true
+
+    # Strip file:// prefix if present
+    if [[ "$url" == file://* ]]; then
+        local local_file="${url#file://}"
+        if [[ ! -f "$local_file" || ! -r "$local_file" ]]; then
+            echo "Error: package source file not found or not readable: '$local_file'" >&2
+            rm -f "$dest"
+            return 1
+        fi
+        if ! cp "$local_file" "$dest"; then
+            rm -f "$dest"
+            return 1
+        fi
+        return 0
+    fi
+
+    # Direct local file path
+    if [[ "$url" != http://* && "$url" != https://* ]]; then
+        if [[ ! -f "$url" || ! -r "$url" ]]; then
+            echo "Error: package source file not found or not readable: '$url'" >&2
+            rm -f "$dest"
+            return 1
+        fi
+        if ! cp "$url" "$dest"; then
+            rm -f "$dest"
+            return 1
+        fi
+        return 0
+    fi
+
+    # Remote URL (http:// or https://)
+    local dl_ok=0
+    if command -v curl >/dev/null 2>&1; then
+        if curl -fsSL "$url" -o "$dest" 2>/dev/null; then
+            dl_ok=1
+        fi
+    elif command -v wget >/dev/null 2>&1; then
+        if wget -qO "$dest" "$url" 2>/dev/null; then
+            dl_ok=1
+        fi
+    else
+        echo "Error: neither 'curl' nor 'wget' is available to download package" >&2
+        rm -f "$dest"
+        return 1
+    fi
+
+    if [[ "$dl_ok" -ne 1 || ! -s "$dest" ]]; then
+        echo "Error: failed to download package from '$url'" >&2
+        rm -f "$dest"
+        return 1
+    fi
+
+    return 0
+}
+
+# Verify downloaded package file against expected checksum
+repo_verify_checksum() {
+    local file="$1"
+    local expected="$2"
+
+    if [[ ! -f "$file" ]]; then
+        return 1
+    fi
+
+    expected="$(echo "$expected" | tr -d '\r')"
+    if [[ -z "$expected" ]]; then
+        return 1
+    fi
+
+    # 1. Direct archive checksum
+    local file_cs
+    file_cs="$(_calc_sha256 "$file" | tr -d '\r')"
+    if [[ "$file_cs" == "$expected" ]]; then
+        return 0
+    fi
+
+    # 2. Uncompressed payload stream (excluding manifest.json)
+    local stream_cs
+    stream_cs="$(tar -xf "$file" --exclude=manifest.json -O 2>/dev/null | _calc_sha256 - || echo "")"
+    stream_cs="$(echo "$stream_cs" | tr -d '\r')"
+    if [[ -n "$stream_cs" && "$stream_cs" == "$expected" ]]; then
+        return 0
+    fi
+
+    return 1
 }

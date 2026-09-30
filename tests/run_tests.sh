@@ -381,6 +381,130 @@ fi
 rm -rf "$SRCH_TMP"
 
 echo ""
+echo "--- Repository Install by Name & Verification Tests ---"
+RIN_TMP="$(mktemp -d 2>/dev/null || mktemp -d -t 'ravpkg-rin-test')"
+RIN_SANDBOX="$RIN_TMP/sandbox"
+RIN_DB="$RIN_TMP/pkg.db"
+mkdir -p "$RIN_SANDBOX"
+db_init "$RIN_DB" "$SCHEMA"
+
+# 1. Build a valid package in the repository
+RIN_BUILD="$RIN_TMP/rin_build"
+mkdir -p "$RIN_BUILD/bin"
+echo "#!/bin/sh" > "$RIN_BUILD/bin/rinapp"
+echo "echo RIN" >> "$RIN_BUILD/bin/rinapp"
+RIN_CS="$(cat "$RIN_BUILD/bin/rinapp" | _calc_sha256 -)"
+cat <<EOF > "$RIN_BUILD/manifest.json"
+{
+  "name": "rinapp",
+  "version": "1.0.0",
+  "description": "Repo install app",
+  "checksum": "$RIN_CS",
+  "install_paths": [
+    { "source": "bin/rinapp", "destination": "/usr/local/bin/rinapp" }
+  ]
+}
+EOF
+RIN_PKG="$RIN_TMP/rinapp-1.0.0.rav"
+(cd "$RIN_BUILD" && tar -czf "$RIN_PKG" manifest.json bin/rinapp)
+
+RIN_INDEX="$RIN_TMP/index.json"
+RIN_CACHE="$RIN_TMP/cache.json"
+
+cat <<EOF > "$RIN_INDEX"
+[
+  {
+    "name": "rinapp",
+    "version": "1.0.0",
+    "description": "Repo install app",
+    "download_url": "file://$RIN_PKG",
+    "checksum": "$RIN_CS"
+  }
+]
+EOF
+
+# Test 1: Install by name succeeds
+assert_ok "install by name from repo index succeeds" "$ROOT_DIR/bin/ravpkg" --root "$RIN_SANDBOX" --db "$RIN_DB" --repo "$RIN_INDEX" --cache "$RIN_CACHE" install rinapp
+if [[ -f "$RIN_SANDBOX/usr/local/bin/rinapp" ]]; then
+    echo "  [PASS] package installed by name placed files on filesystem"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] package installed by name missing files from filesystem"
+    FAILED=$((FAILED + 1))
+fi
+
+# Test 2: Install by name with checksum mismatch between index and downloaded file
+BAD_INDEX="$RIN_TMP/bad_index.json"
+cat <<EOF > "$BAD_INDEX"
+[
+  {
+    "name": "badcs-app",
+    "version": "1.0.0",
+    "description": "Bad checksum in index",
+    "download_url": "file://$RIN_PKG",
+    "checksum": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+]
+EOF
+
+assert_fail "install by name with index checksum mismatch fails" "$ROOT_DIR/bin/ravpkg" --root "$RIN_SANDBOX" --db "$RIN_DB" --repo "$BAD_INDEX" --cache "$RIN_TMP/bad_cache.json" --no-cache install badcs-app
+
+# Test 3: Install by name when package not in index
+assert_fail "install by name with package not in index fails" "$ROOT_DIR/bin/ravpkg" --root "$RIN_SANDBOX" --db "$RIN_DB" --repo "$RIN_INDEX" --cache "$RIN_CACHE" install not-in-index
+
+# Test 4: Network failure handling
+NETFAIL_INDEX="$RIN_TMP/netfail_index.json"
+cat <<EOF > "$NETFAIL_INDEX"
+[
+  {
+    "name": "netfail-pkg",
+    "version": "1.0.0",
+    "description": "Netfail package",
+    "download_url": "http://127.0.0.1:59999/nonexistent.rav",
+    "checksum": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]
+EOF
+
+assert_fail "network failure during package download fails cleanly" "$ROOT_DIR/bin/ravpkg" --root "$RIN_SANDBOX" --db "$RIN_DB" --repo "$NETFAIL_INDEX" --cache "$RIN_TMP/nf_cache.json" --no-cache install netfail-pkg
+
+# Test 5: Checksum disagreement between repository index and package manifest
+DIS_BUILD="$RIN_TMP/dis_build"
+mkdir -p "$DIS_BUILD/bin"
+echo "dis" > "$DIS_BUILD/bin/dis"
+cat <<EOF > "$DIS_BUILD/manifest.json"
+{
+  "name": "dis-pkg",
+  "version": "1.0.0",
+  "description": "Disagree package",
+  "checksum": "1111111111111111111111111111111111111111111111111111111111111111",
+  "install_paths": [
+    { "source": "bin/dis", "destination": "/usr/local/bin/dis" }
+  ]
+}
+EOF
+DIS_PKG="$RIN_TMP/dis-1.0.0.rav"
+(cd "$DIS_BUILD" && tar -czf "$DIS_PKG" manifest.json bin/dis)
+DIS_FILE_CS="$(_calc_sha256 "$DIS_PKG")"
+
+DIS_INDEX="$RIN_TMP/dis_index.json"
+cat <<EOF > "$DIS_INDEX"
+[
+  {
+    "name": "dis-pkg",
+    "version": "1.0.0",
+    "description": "Disagree package",
+    "download_url": "file://$DIS_PKG",
+    "checksum": "$DIS_FILE_CS"
+  }
+]
+EOF
+
+assert_fail "checksum disagreement between index and manifest fails loudly" "$ROOT_DIR/bin/ravpkg" --root "$RIN_SANDBOX" --db "$RIN_DB" --repo "$DIS_INDEX" --cache "$RIN_TMP/dis_cache.json" --no-cache install dis-pkg
+
+rm -rf "$RIN_TMP"
+
+echo ""
 echo "--- Dependency Resolution & Cycle Detection Tests ---"
 DEP_TMP="$(mktemp -d 2>/dev/null || mktemp -d -t 'ravpkg-dep-test')"
 DEP_SANDBOX="$DEP_TMP/sandbox"

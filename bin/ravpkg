@@ -81,7 +81,7 @@ Usage:
 Available Commands:
   help        Help about any command
   info        Display details and installed files for a package [FUNCTIONAL]
-  install     Install a package archive onto the system [FUNCTIONAL]
+  install     Install a package archive or repository package by name [FUNCTIONAL]
   list        List all installed packages [FUNCTIONAL]
   remove      Remove an installed package from the system [FUNCTIONAL]
   search      Search for packages in the repository index [FUNCTIONAL]
@@ -92,6 +92,7 @@ Flags:
   -r, --root string     Target root directory for installation (default: /)
       --repo string     Repository URL or local path to index.json
       --cache string    Path to repository index cache file
+      --no-cache        Force a fresh repository index fetch before resolving
       --no-deps         Skip dependency resolution checks
       --skip-verify     Skip package checksum verification (DEVELOPMENT ONLY)
   -h, --help            help for ravpkg
@@ -134,6 +135,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --no-deps|--nodeps)
             export RAVPKG_NO_DEPS=1
+            shift
+            ;;
+        --no-cache)
+            export RAVPKG_NO_CACHE=1
             shift
             ;;
         --skip-verify)
@@ -268,6 +273,8 @@ case "$COMMAND" in
                 export RAVPKG_SKIP_VERIFY=1
             elif [[ "$sarg" == "--no-deps" || "$sarg" == "--nodeps" ]]; then
                 export RAVPKG_NO_DEPS=1
+            elif [[ "$sarg" == "--no-cache" ]]; then
+                export RAVPKG_NO_CACHE=1
             else
                 clean_subargs+=("$sarg")
             fi
@@ -282,12 +289,109 @@ case "$COMMAND" in
             if [[ ${#SUBARGS[@]} -eq 0 ]]; then
                 echo "Error: accepts 1 arg(s), received 0" >&2
             fi
-            echo "Usage: ravpkg install <package-file> [--skip-verify] [--no-deps]" >&2
+            echo "Usage: ravpkg install <package-file|package-name> [--no-cache] [--skip-verify] [--no-deps]" >&2
             exit 1
         fi
-        PKG_FILE="${SUBARGS[0]}"
+        TARGET_ARG="${SUBARGS[0]}"
         db_init "$DB_PATH" "$SCHEMA_FILE"
-        pkg_install "$DB_PATH" "$PKG_FILE"
+
+        is_file_target=0
+        if [[ -f "$TARGET_ARG" ]]; then
+            is_file_target=1
+        elif [[ "$TARGET_ARG" == *"/"* || "$TARGET_ARG" == *"\\"* || "$TARGET_ARG" == *.rav || "$TARGET_ARG" == *.tar* ]]; then
+            is_file_target=1
+        fi
+
+        if [[ "$is_file_target" -eq 1 ]]; then
+            # Direct local file install (existing behavior, unchanged)
+            pkg_install "$DB_PATH" "$TARGET_ARG"
+        else
+            # Package name: resolve via repository index
+            if [[ -z "$REPO_CACHE" ]]; then
+                REPO_CACHE="$(repo_get_default_cache_path)"
+            fi
+            if [[ -z "$REPO_URL" ]]; then
+                REPO_URL="${DEFAULT_REPO_URL:-https://repo.ravynos.com/index.json}"
+            fi
+
+            # Check if index needs to be fetched or refreshed
+            if [[ "${RAVPKG_NO_CACHE:-0}" == "1" || ! -f "$REPO_CACHE" ]]; then
+                echo "[REPO] Updating repository index from $REPO_URL..."
+                if ! repo_fetch_index "$REPO_URL" "$REPO_CACHE"; then
+                    echo "Error: failed to fetch repository index from '$REPO_URL'" >&2
+                    exit 1
+                fi
+            fi
+
+            # Look up package in index
+            pkg_entry="$(repo_lookup_package "$REPO_CACHE" "$TARGET_ARG" || true)"
+            if [[ -z "$pkg_entry" || "$pkg_entry" == "null" ]]; then
+                echo "Error: package '$TARGET_ARG' not found in repository index." >&2
+                exit 1
+            fi
+
+            dl_url="$(echo "$pkg_entry" | jq -r '.download_url // empty')"
+            idx_checksum="$(echo "$pkg_entry" | jq -r '.checksum // empty')"
+            pkg_ver="$(echo "$pkg_entry" | jq -r '.version // empty')"
+
+            if [[ -z "$dl_url" || -z "$idx_checksum" ]]; then
+                echo "Error: repository entry for '$TARGET_ARG' is missing download_url or checksum." >&2
+                exit 1
+            fi
+
+            resolved_url="$(repo_resolve_url "$REPO_URL" "$dl_url")"
+
+            TMP_PKG="$(mktemp 2>/dev/null || mktemp -t 'ravpkg-dl-XXXXXX.rav')"
+            _clean_tmp_pkg() {
+                if [[ -n "${TMP_PKG:-}" && -f "$TMP_PKG" ]]; then
+                    rm -f "$TMP_PKG"
+                fi
+            }
+            trap '_clean_tmp_pkg' EXIT INT TERM ERR
+
+            echo "[REPO] Downloading $TARGET_ARG ($pkg_ver) from $resolved_url..."
+            if ! repo_download_package "$resolved_url" "$TMP_PKG"; then
+                echo "Error: failed to download package '$TARGET_ARG' from '$resolved_url'" >&2
+                _clean_tmp_pkg
+                trap - EXIT INT TERM ERR
+                exit 1
+            fi
+
+            # Check 1: Verify downloaded file against repository index checksum BEFORE install
+            if [[ "${RAVPKG_SKIP_VERIFY:-0}" != "1" ]]; then
+                if ! repo_verify_checksum "$TMP_PKG" "$idx_checksum"; then
+                    actual_dl_cs="$(_calc_sha256 "$TMP_PKG" | tr -d '\r')"
+                    echo "Error: checksum mismatch between downloaded package and repository index for '$TARGET_ARG'!" >&2
+                    echo "  Index checksum:      $idx_checksum" >&2
+                    echo "  Downloaded file:     $actual_dl_cs" >&2
+                    echo "Download rejected. Integrity cannot be verified." >&2
+                    _clean_tmp_pkg
+                    trap - EXIT INT TERM ERR
+                    exit 1
+                fi
+            fi
+
+            # Check 2: Verify agreement between repository index checksum and package manifest checksum
+            manifest_cs="$(tar -xf "$TMP_PKG" -O manifest.json 2>/dev/null | jq -r '.checksum // empty' 2>/dev/null | tr -d '\r' || true)"
+            if [[ "${RAVPKG_SKIP_VERIFY:-0}" != "1" ]]; then
+                if [[ -n "$manifest_cs" && -n "$idx_checksum" && "$manifest_cs" != "$idx_checksum" ]]; then
+                    echo "Error: checksum disagreement between repository index and package manifest for '$TARGET_ARG'!" >&2
+                    echo "  Repository index: $idx_checksum" >&2
+                    echo "  Package manifest: $manifest_cs" >&2
+                    echo "Installation rejected: repository index and manifest must agree." >&2
+                    _clean_tmp_pkg
+                    trap - EXIT INT TERM ERR
+                    exit 1
+                fi
+            fi
+
+            pkg_install "$DB_PATH" "$TMP_PKG"
+            inst_rc=$?
+
+            _clean_tmp_pkg
+            trap - EXIT INT TERM ERR
+            exit $inst_rc
+        fi
         ;;
 
     remove)

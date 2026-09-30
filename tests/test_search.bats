@@ -132,3 +132,159 @@ teardown() {
     [ "$status" -eq 0 ]
     [[ "$output" =~ "No packages found matching 'nonexistentpkg'" ]]
 }
+
+@test "install-by-name: successful install from repository index" {
+    PKG_BUILD="$TEST_TMP/ravtext_build"
+    mkdir -p "$PKG_BUILD/bin"
+    echo "#!/bin/sh" > "$PKG_BUILD/bin/ravtext"
+    echo "echo Text Editor" >> "$PKG_BUILD/bin/ravtext"
+    TEXT_CS="$(cat "$PKG_BUILD/bin/ravtext" | _calc_sha256 -)"
+
+    cat <<EOF > "$PKG_BUILD/manifest.json"
+{
+  "name": "ravtext",
+  "version": "1.0.0",
+  "description": "Minimal text editor for ravynOS desktop",
+  "checksum": "$TEXT_CS",
+  "install_paths": [
+    { "source": "bin/ravtext", "destination": "/usr/local/bin/ravtext" }
+  ]
+}
+EOF
+    RAVTEXT_PKG="$TEST_TMP/ravtext-1.0.0.rav"
+    (cd "$PKG_BUILD" && tar -czf "$RAVTEXT_PKG" manifest.json bin/ravtext)
+
+    cat <<EOF > "$INDEX_FILE"
+[
+  {
+    "name": "ravtext",
+    "version": "1.0.0",
+    "description": "Minimal text editor",
+    "download_url": "file://$RAVTEXT_PKG",
+    "checksum": "$TEXT_CS"
+  }
+]
+EOF
+
+    SANDBOX="$TEST_TMP/sandbox"
+    DB="$TEST_TMP/test.db"
+    mkdir -p "$SANDBOX"
+
+    run "$ROOT_DIR/bin/ravpkg" --root "$SANDBOX" --db "$DB" --repo "$INDEX_FILE" --cache "$CACHE_FILE" --no-cache install ravtext
+    [ "$status" -eq 0 ]
+    [[ "$output" =~ "Successfully installed: ravtext 1.0.0" ]]
+    [ -f "$SANDBOX/usr/local/bin/ravtext" ]
+}
+
+@test "install-by-name: index checksum mismatch fails loudly" {
+    PKG_BUILD="$TEST_TMP/ravtext_build2"
+    mkdir -p "$PKG_BUILD/bin"
+    echo "echo Text Editor" >> "$PKG_BUILD/bin/ravtext"
+    TEXT_CS="$(cat "$PKG_BUILD/bin/ravtext" | _calc_sha256 -)"
+
+    cat <<EOF > "$PKG_BUILD/manifest.json"
+{
+  "name": "ravtext",
+  "version": "1.0.0",
+  "description": "Minimal text editor",
+  "checksum": "$TEXT_CS",
+  "install_paths": [
+    { "source": "bin/ravtext", "destination": "/usr/local/bin/ravtext" }
+  ]
+}
+EOF
+    RAVTEXT_PKG="$TEST_TMP/ravtext2-1.0.0.rav"
+    (cd "$PKG_BUILD" && tar -czf "$RAVTEXT_PKG" manifest.json bin/ravtext)
+
+    cat <<EOF > "$INDEX_FILE"
+[
+  {
+    "name": "ravtext",
+    "version": "1.0.0",
+    "description": "Minimal text editor",
+    "download_url": "file://$RAVTEXT_PKG",
+    "checksum": "0000000000000000000000000000000000000000000000000000000000000000"
+  }
+]
+EOF
+
+    SANDBOX="$TEST_TMP/sandbox2"
+    DB="$TEST_TMP/test2.db"
+    mkdir -p "$SANDBOX"
+
+    run "$ROOT_DIR/bin/ravpkg" --root "$SANDBOX" --db "$DB" --repo "$INDEX_FILE" --cache "$CACHE_FILE" --no-cache install ravtext
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "checksum mismatch between downloaded package and repository index" ]]
+    [ ! -f "$SANDBOX/usr/local/bin/ravtext" ]
+}
+
+@test "install-by-name: package not in index fails with clear error" {
+    cat <<EOF > "$INDEX_FILE"
+[]
+EOF
+    SANDBOX="$TEST_TMP/sandbox3"
+    DB="$TEST_TMP/test3.db"
+
+    run "$ROOT_DIR/bin/ravpkg" --root "$SANDBOX" --db "$DB" --repo "$INDEX_FILE" --cache "$CACHE_FILE" --no-cache install missing-app
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "package 'missing-app' not found in repository index" ]]
+}
+
+@test "install-by-name: network failure handled gracefully with no leftover files" {
+    cat <<EOF > "$INDEX_FILE"
+[
+  {
+    "name": "netfail-app",
+    "version": "1.0.0",
+    "description": "Net fail app",
+    "download_url": "http://127.0.0.1:59999/nonexistent.rav",
+    "checksum": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]
+EOF
+    SANDBOX="$TEST_TMP/sandbox4"
+    DB="$TEST_TMP/test4.db"
+
+    run "$ROOT_DIR/bin/ravpkg" --root "$SANDBOX" --db "$DB" --repo "$INDEX_FILE" --cache "$CACHE_FILE" --no-cache install netfail-app
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "failed to download package" ]]
+}
+
+@test "install-by-name: index and manifest checksum disagreement fails loudly" {
+    PKG_BUILD="$TEST_TMP/disagree_build"
+    mkdir -p "$PKG_BUILD/bin"
+    echo "disagree" > "$PKG_BUILD/bin/disagree"
+    CS1="1111111111111111111111111111111111111111111111111111111111111111"
+    cat <<EOF > "$PKG_BUILD/manifest.json"
+{
+  "name": "disagree-app",
+  "version": "1.0.0",
+  "description": "Disagree app",
+  "checksum": "$CS1",
+  "install_paths": [
+    { "source": "bin/disagree", "destination": "/usr/local/bin/disagree" }
+  ]
+}
+EOF
+    DISAGREE_PKG="$TEST_TMP/disagree.rav"
+    (cd "$PKG_BUILD" && tar -czf "$DISAGREE_PKG" manifest.json bin/disagree)
+    CS2="$(_calc_sha256 "$DISAGREE_PKG")"
+
+    cat <<EOF > "$INDEX_FILE"
+[
+  {
+    "name": "disagree-app",
+    "version": "1.0.0",
+    "description": "Disagree app",
+    "download_url": "file://$DISAGREE_PKG",
+    "checksum": "$CS2"
+  }
+]
+EOF
+
+    SANDBOX="$TEST_TMP/sandbox5"
+    DB="$TEST_TMP/test5.db"
+    run "$ROOT_DIR/bin/ravpkg" --root "$SANDBOX" --db "$DB" --repo "$INDEX_FILE" --cache "$CACHE_FILE" --no-cache install disagree-app
+    [ "$status" -ne 0 ]
+    [[ "$output" =~ "checksum disagreement between repository index and package manifest" ]]
+}
