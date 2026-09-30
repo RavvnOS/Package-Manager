@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# lib/db.sh - SQLite wrapper functions for ravpkg using sqlite3 -json
+# lib/db.sh - SQLite wrapper functions for ravpkg using parameter bindings and -json
+set -euo pipefail
 
 # Ensure sqlite3 is available
 db_check_dependency() {
@@ -43,13 +44,13 @@ SQL
     fi
 }
 
-# Escape single quotes for SQL literals
+# Escape single quotes for SQL parameter binding literals
 _sql_escape() {
     local val="$1"
     echo "${val//\'/\'\'}"
 }
 
-# Add a package to the database
+# Add a package to the database using parameter binding
 # Arguments: db_path, name, version, install_date, manifest_path, installed_files_json
 db_add_package() {
     local db_path="$1"
@@ -78,12 +79,18 @@ db_add_package() {
     esc_files="$(_sql_escape "$installed_files")"
 
     sqlite3 "$db_path" <<SQL
+.parameter init
+.parameter set :name '$esc_name'
+.parameter set :version '$esc_ver'
+.parameter set :install_date '$esc_date'
+.parameter set :manifest_path '$esc_man'
+.parameter set :installed_files '$esc_files'
 INSERT INTO installed_packages (name, version, install_date, manifest_path, installed_files)
-VALUES ('$esc_name', '$esc_ver', '$esc_date', '$esc_man', '$esc_files');
+VALUES (:name, :version, :install_date, :manifest_path, :installed_files);
 SQL
 }
 
-# Remove a package from the database
+# Remove a package from the database using parameter binding
 # Arguments: db_path, name
 db_remove_package() {
     local db_path="$1"
@@ -95,17 +102,26 @@ db_remove_package() {
     esc_name="$(_sql_escape "$name")"
 
     local count
-    count="$(sqlite3 "$db_path" "SELECT COUNT(*) FROM installed_packages WHERE name='$esc_name';")"
+    count="$(sqlite3 "$db_path" <<SQL
+.parameter init
+.parameter set :name '$esc_name'
+SELECT COUNT(*) FROM installed_packages WHERE name = :name;
+SQL
+)"
 
     if [[ "$count" -eq 0 ]]; then
         echo "Error: package not found in local database: $name" >&2
         return 1
     fi
 
-    sqlite3 "$db_path" "DELETE FROM installed_packages WHERE name='$esc_name';"
+    sqlite3 "$db_path" <<SQL
+.parameter init
+.parameter set :name '$esc_name'
+DELETE FROM installed_packages WHERE name = :name;
+SQL
 }
 
-# Get a package's record from the database
+# Get a package's record from the database using parameter binding
 # Arguments: db_path, name
 # Outputs JSON object: {"name": "...", "version": "...", "install_date": "...", "manifest_path": "...", "installed_files": "..."}
 db_get_package() {
@@ -118,7 +134,12 @@ db_get_package() {
     esc_name="$(_sql_escape "$name")"
 
     local json_out
-    json_out="$(sqlite3 -json "$db_path" "SELECT name, version, install_date, manifest_path, installed_files FROM installed_packages WHERE name='$esc_name';")"
+    json_out="$(sqlite3 -json "$db_path" <<SQL
+.parameter init
+.parameter set :name '$esc_name'
+SELECT name, version, install_date, manifest_path, installed_files FROM installed_packages WHERE name = :name;
+SQL
+)"
 
     if [[ -z "$json_out" || "$json_out" == "[]" ]]; then
         echo "Error: package not found in local database: $name" >&2

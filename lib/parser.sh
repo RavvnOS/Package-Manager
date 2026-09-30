@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # lib/parser.sh - jq-based manifest parsing and validation for ravpkg
+set -euo pipefail
 
 parser_check_dependency() {
     if ! command -v jq >/dev/null 2>&1; then
