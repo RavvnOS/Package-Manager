@@ -24,8 +24,10 @@ mkdir -p "$LIB_DIR"
 # Copy library scripts and schema
 cp lib/db.sh "$LIB_DIR/db.sh"
 cp lib/parser.sh "$LIB_DIR/parser.sh"
+cp lib/install.sh "$LIB_DIR/install.sh"
+cp lib/remove.sh "$LIB_DIR/remove.sh"
 cp schema/schema.sql "$LIB_DIR/schema.sql"
-chmod 644 "$LIB_DIR/db.sh" "$LIB_DIR/parser.sh" "$LIB_DIR/schema.sql"
+chmod 644 "$LIB_DIR/db.sh" "$LIB_DIR/parser.sh" "$LIB_DIR/install.sh" "$LIB_DIR/remove.sh" "$LIB_DIR/schema.sql"
 
 # Copy main binary executable
 cp bin/ravpkg "$BIN_DIR/ravpkg"

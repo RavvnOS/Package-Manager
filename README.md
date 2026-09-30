@@ -12,25 +12,25 @@ parser/validator, and CLI command routing.
 
 ## Status
 
-- **Phase:** 1–2 complete (design, core engine, CLI skeleton)
+- **Phase:** 1–2 complete (design, core engine, transactional install/remove engine, CLI)
 - **Language:** Bash (uses `sqlite3` and `jq` as external tools — no compiled
   binary or language runtime required)
-- **Functional commands:** `list`, `info`
-- **Stub commands:** `install`, `remove`, `search` (deferred to later phases)
-- **Not yet implemented:** dependency resolution, filesystem install/remove
-  logic, remote repository tooling, daemon/launchd integration, signing
+- **Functional commands:** `list`, `info`, `install`, `remove`
+- **Stub commands:** `search` (deferred to Phase 4 repo tooling)
+- **Not yet implemented:** dependency resolution (Phase 3), remote repository
+  tooling (Phase 4), daemon/launchd integration, GPG signing
 
 ---
 
 ## Command Status
 
-| Command                 | Status         | Description                                                        | Phase   |
-| ------------------------ | -------------- | -------------------------------------------------------------------- | ------- |
-| `ravpkg list`            | **Functional** | Queries and lists all installed packages from the local SQLite DB.   | Phase 1 |
-| `ravpkg info <pkg>`      | **Functional** | Displays metadata and installed file paths for a package.            | Phase 1 |
-| `ravpkg install <file>`  | Stub           | Unpack and filesystem install logic.                                 | Phase 2 |
-| `ravpkg remove <pkg>`    | Stub           | Filesystem file removal logic.                                       | Phase 2 |
-| `ravpkg search <query>`  | Stub           | Remote repository index query.                                       | Phase 4 |
+| Command                 | Status         | Description                                                                  | Phase   |
+| ------------------------ | -------------- | ---------------------------------------------------------------------------- | ------- |
+| `ravpkg list`            | **Functional** | Queries and lists all installed packages from the local SQLite DB.             | Phase 1 |
+| `ravpkg info <pkg>`      | **Functional** | Displays metadata and installed file paths for a package.                      | Phase 1 |
+| `ravpkg install <file>`  | **Functional** | Validates checksum, stages unpack, copies files, with transactional rollback. | Phase 2 |
+| `ravpkg remove <pkg>`    | **Functional** | Deletes tracked files and manifest, prunes directories, cleans DB record.     | Phase 2 |
+| `ravpkg search <query>`  | Stub           | Remote repository index query.                                               | Phase 4 |
 
 > Dependency resolution and launchd/daemon service integration are deferred
 > to subsequent phases.
@@ -45,7 +45,9 @@ ravpkg/
 │   └── ravpkg                  # Main executable script; argument parsing & subcommand dispatch
 ├── lib/
 │   ├── db.sh                   # sqlite3 wrapper functions (init, add, remove, get, list)
-│   └── parser.sh               # jq-based manifest parsing & schema validation functions
+│   ├── parser.sh               # jq-based manifest parsing & schema validation functions
+│   ├── install.sh              # Filesystem installation engine with transactional rollback
+│   └── remove.sh               # Filesystem package removal and pruning engine
 ├── schema/
 │   └── schema.sql               # SQLite table definitions (installed_packages)
 ├── tests/
@@ -56,9 +58,12 @@ ravpkg/
 │   │   └── bad-checksum-manifest.json
 │   ├── test_parser.bats         # bats tests for parser & validation rules
 │   ├── test_db.bats             # bats tests for SQLite CRUD operations
+│   ├── test_install_remove.bats # bats tests for install, rollback, and remove
 │   └── run_tests.sh             # Standalone test runner (works with or without bats)
 ├── docs/
-│   └── manifest-spec.md         # Formal specification for package manifest schema
+│   ├── manifest-spec.md         # Formal specification for package manifest schema
+│   ├── comparison.md            # Architectural comparison against dnf and yum
+│   └── benchmarks.md            # Benchmark measurements and methodology
 ├── install.sh                   # Installer script; checks sqlite3/jq, installs to /usr/local/bin
 ├── Makefile                     # Targets: test, install, clean
 └── README.md                    # Project documentation
@@ -117,9 +122,15 @@ make test
 # View package info
 ./bin/ravpkg info ravterm --db ./test.db
 
-# Stubs (not yet implemented)
+# Install a package archive (with optional --root sandbox)
 ./bin/ravpkg install ./sample-package.rav
+./bin/ravpkg install ./sample-package.rav --root /opt/sandbox
+
+# Remove an installed package
 ./bin/ravpkg remove sample-package
+./bin/ravpkg remove sample-package --root /opt/sandbox
+
+# Search repository (Phase 4 stub)
 ./bin/ravpkg search editor
 ```
 

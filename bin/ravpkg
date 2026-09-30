@@ -25,6 +25,10 @@ fi
 source "$LIB_DIR/db.sh"
 # shellcheck source=lib/parser.sh
 source "$LIB_DIR/parser.sh"
+# shellcheck source=lib/install.sh
+source "$LIB_DIR/install.sh"
+# shellcheck source=lib/remove.sh
+source "$LIB_DIR/remove.sh"
 
 # Pre-flight check: verify dependencies
 for tool in sqlite3 jq; do
@@ -40,7 +44,11 @@ get_default_db_path() {
         echo "$RAVPKG_DB"
         return
     fi
-    # If /var/db/ravpkg exists or can be created by root, use standard ravynOS path
+    local root_prefix="${RAVPKG_ROOT:-}"
+    if [[ -n "$root_prefix" ]]; then
+        echo "${root_prefix%/}/var/db/ravpkg/pkg.db"
+        return
+    fi
     if [[ -w "/var/db" || -d "/var/db/ravpkg" ]]; then
         echo "/var/db/ravpkg/pkg.db"
     elif [[ -d "/var" && "$EUID" -eq 0 ]]; then
@@ -55,11 +63,11 @@ show_help() {
 ravpkg is the native package manager for ravynOS, managing package
 installations, removals, queries, and system manifests.
 
-Phase 1-2 Scaffolding:
+Command Status:
 - list: functional (reads local SQLite package DB)
 - info: functional (reads package metadata and file list)
-- install: stub (deferred to Phase 2)
-- remove: stub (deferred to Phase 2)
+- install: functional (transactional filesystem install with rollback)
+- remove: functional (filesystem removal with missing file tolerance)
 - search: stub (deferred to Phase 4)
 
 Usage:
@@ -68,14 +76,15 @@ Usage:
 Available Commands:
   help        Help about any command
   info        Display details and installed files for a package [FUNCTIONAL]
-  install     Install a package archive onto the system [STUB]
+  install     Install a package archive onto the system [FUNCTIONAL]
   list        List all installed packages [FUNCTIONAL]
-  remove      Remove an installed package from the system [STUB]
+  remove      Remove an installed package from the system [FUNCTIONAL]
   search      Search for packages in the remote repository [STUB]
 
 Flags:
-  -d, --db string   Path to SQLite database (default: /var/db/ravpkg/pkg.db or ./ravpkg.db)
-  -h, --help        help for ravpkg
+  -d, --db string     Path to SQLite database (default: /var/db/ravpkg/pkg.db or ./ravpkg.db)
+  -r, --root string   Target root directory for installation (default: /)
+  -h, --help          help for ravpkg
 
 Use "ravpkg [command] --help" for more information about a command.
 EOF
@@ -97,6 +106,18 @@ while [[ $# -gt 0 ]]; do
             ;;
         --db=*)
             DB_PATH="${1#*=}"
+            shift
+            ;;
+        -r|--root)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: flag needs an argument: --root" >&2
+                exit 1
+            fi
+            export RAVPKG_ROOT="$2"
+            shift 2
+            ;;
+        --root=*)
+            export RAVPKG_ROOT="${1#*=}"
             shift
             ;;
         -h|--help)
@@ -201,7 +222,8 @@ case "$COMMAND" in
             exit 1
         fi
         PKG_FILE="${SUBARGS[0]}"
-        echo "[STUB] Not yet implemented: filesystem installation logic for \"$PKG_FILE\" is deferred to Phase 2."
+        db_init "$DB_PATH" "$SCHEMA_FILE"
+        pkg_install "$DB_PATH" "$PKG_FILE"
         ;;
 
     remove)
@@ -213,7 +235,8 @@ case "$COMMAND" in
             exit 1
         fi
         PKG_NAME="${SUBARGS[0]}"
-        echo "[STUB] Not yet implemented: filesystem removal logic for \"$PKG_NAME\" is deferred to Phase 2."
+        db_init "$DB_PATH" "$SCHEMA_FILE"
+        pkg_remove "$DB_PATH" "$PKG_NAME"
         ;;
 
     search)

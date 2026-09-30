@@ -44,9 +44,11 @@ SQL
     fi
 }
 
-# Escape single quotes for SQL parameter binding literals
+# Escape single quotes and strip newlines for SQLite CLI parameter binding literals
 _sql_escape() {
     local val="$1"
+    val="${val//$'\r'/}"
+    val="${val//$'\n'/}"
     echo "${val//\'/\'\'}"
 }
 
