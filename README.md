@@ -30,24 +30,6 @@
 
 ---
 
-##  Table of Contents
-
-- [Overview](#overview)
-- [Why ravpkg](#-why-ravpkg)
-- [Features](#-features)
-- [Status](#-status)
-- [Quick Start](#-quick-start)
-- [Usage](#-usage)
-- [Architecture](#-architecture)
-- [ravpkg vs. dnf / yum](#-ravpkg-vs-dnf--yum)
-- [Documentation](#-documentation)
-- [Testing](#-testing)
-- [Security](#-security)
-- [Roadmap](#-roadmap)
-- [Contributing](#-contributing)
-- [License](#-license)
-
----
 
 ## Overview
 
