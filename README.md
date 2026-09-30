@@ -4,7 +4,6 @@
 
 **A minimal-viable package manager for ravynOS**
 
-*A macOS-compatible, open-source operating system built on a Darwin/FreeBSD userland.*
 
 ![Shell](https://img.shields.io/badge/language-Bash-4EAA25?logo=gnu-bash&logoColor=white)
 ![Status](https://img.shields.io/badge/status-Phase%201--3%20complete-brightgreen)
