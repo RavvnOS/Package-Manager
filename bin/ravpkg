@@ -29,6 +29,8 @@ source "$LIB_DIR/parser.sh"
 source "$LIB_DIR/install.sh"
 # shellcheck source=lib/remove.sh
 source "$LIB_DIR/remove.sh"
+# shellcheck source=lib/repo.sh
+source "$LIB_DIR/repo.sh"
 
 # Pre-flight check: verify dependencies
 for tool in sqlite3 jq; do
@@ -68,7 +70,8 @@ Command Status:
 - info: functional (reads package metadata and file list)
 - install: functional (transactional filesystem install with rollback)
 - remove: functional (filesystem removal with missing file tolerance)
-- search: stub (deferred to Phase 4)
+- search: functional (case-insensitive search against repository index)
+- update: functional (fetch and cache remote repository index)
 
 Usage:
   ravpkg [command]
@@ -79,12 +82,15 @@ Available Commands:
   install     Install a package archive onto the system [FUNCTIONAL]
   list        List all installed packages [FUNCTIONAL]
   remove      Remove an installed package from the system [FUNCTIONAL]
-  search      Search for packages in the remote repository [STUB]
+  search      Search for packages in the repository index [FUNCTIONAL]
+  update      Fetch and cache the repository index [FUNCTIONAL]
 
 Flags:
-  -d, --db string     Path to SQLite database (default: /var/db/ravpkg/pkg.db or ./ravpkg.db)
-  -r, --root string   Target root directory for installation (default: /)
-  -h, --help          help for ravpkg
+  -d, --db string       Path to SQLite database (default: /var/db/ravpkg/pkg.db or ./ravpkg.db)
+  -r, --root string     Target root directory for installation (default: /)
+      --repo string     Repository URL or local path to index.json
+      --cache string    Path to repository index cache file
+  -h, --help            help for ravpkg
 
 Use "ravpkg [command] --help" for more information about a command.
 EOF
@@ -92,6 +98,8 @@ EOF
 
 # Parse global options
 DB_PATH=""
+REPO_URL="${RAVPKG_REPO_URL:-}"
+REPO_CACHE="${RAVPKG_REPO_CACHE:-}"
 ARGS=()
 
 while [[ $# -gt 0 ]]; do
@@ -120,6 +128,30 @@ while [[ $# -gt 0 ]]; do
             export RAVPKG_ROOT="${1#*=}"
             shift
             ;;
+        --repo)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: flag needs an argument: --repo" >&2
+                exit 1
+            fi
+            REPO_URL="$2"
+            shift 2
+            ;;
+        --repo=*)
+            REPO_URL="${1#*=}"
+            shift
+            ;;
+        --cache)
+            if [[ $# -lt 2 ]]; then
+                echo "Error: flag needs an argument: --cache" >&2
+                exit 1
+            fi
+            REPO_CACHE="$2"
+            shift 2
+            ;;
+        --cache=*)
+            REPO_CACHE="${1#*=}"
+            shift
+            ;;
         -h|--help)
             show_help
             exit 0
@@ -133,6 +165,10 @@ done
 
 if [[ -z "$DB_PATH" ]]; then
     DB_PATH="$(get_default_db_path)"
+fi
+
+if [[ -z "$REPO_CACHE" ]]; then
+    REPO_CACHE="$(repo_get_default_cache_path)"
 fi
 
 if [[ ${#ARGS[@]} -eq 0 ]]; then
@@ -248,7 +284,37 @@ case "$COMMAND" in
             exit 1
         fi
         QUERY="${SUBARGS[0]}"
-        echo "[STUB] Not yet implemented: repository search for \"$QUERY\" depends on Phase 4 repo tooling."
+
+        # If --repo was explicitly provided, populate or update the cache from that source
+        if [[ -n "$REPO_URL" ]]; then
+            if ! repo_fetch_index "$REPO_URL" "$REPO_CACHE"; then
+                exit 1
+            fi
+        fi
+
+        if ! repo_search "$REPO_CACHE" "$QUERY"; then
+            exit 1
+        fi
+        ;;
+
+    update)
+        if [[ ${#SUBARGS[@]} -gt 0 && ("${SUBARGS[0]}" == "-h" || "${SUBARGS[0]}" == "--help") ]]; then
+            echo "Fetch and cache repository index [FUNCTIONAL]"
+            echo ""
+            echo "Usage:"
+            echo "  ravpkg update"
+            exit 0
+        fi
+
+        repo_source="${REPO_URL:-$DEFAULT_REPO_URL}"
+        echo "[REPO] Fetching repository index from $repo_source..."
+        if repo_fetch_index "$repo_source" "$REPO_CACHE"; then
+            pkg_count="$(jq 'length' "$REPO_CACHE" 2>/dev/null || echo 0)"
+            echo "Successfully updated repository index ($pkg_count package(s) available)."
+        else
+            echo "Error: failed to update repository index" >&2
+            exit 1
+        fi
         ;;
 
     *)

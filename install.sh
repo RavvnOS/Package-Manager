@@ -26,12 +26,14 @@ cp lib/db.sh "$LIB_DIR/db.sh"
 cp lib/parser.sh "$LIB_DIR/parser.sh"
 cp lib/install.sh "$LIB_DIR/install.sh"
 cp lib/remove.sh "$LIB_DIR/remove.sh"
+cp lib/repo.sh "$LIB_DIR/repo.sh"
 cp schema/schema.sql "$LIB_DIR/schema.sql"
-chmod 644 "$LIB_DIR/db.sh" "$LIB_DIR/parser.sh" "$LIB_DIR/install.sh" "$LIB_DIR/remove.sh" "$LIB_DIR/schema.sql"
+chmod 644 "$LIB_DIR/db.sh" "$LIB_DIR/parser.sh" "$LIB_DIR/install.sh" "$LIB_DIR/remove.sh" "$LIB_DIR/repo.sh" "$LIB_DIR/schema.sql"
 
-# Copy main binary executable
+# Copy main binary executables
 cp bin/ravpkg "$BIN_DIR/ravpkg"
-chmod 755 "$BIN_DIR/ravpkg"
+cp repo/generate-index.sh "$BIN_DIR/ravpkg-generate-index"
+chmod 755 "$BIN_DIR/ravpkg" "$BIN_DIR/ravpkg-generate-index"
 
 echo "ravpkg successfully installed to $BIN_DIR/ravpkg"
 echo "Libraries installed to $LIB_DIR"

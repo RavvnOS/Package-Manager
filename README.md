@@ -12,13 +12,13 @@ parser/validator, and CLI command routing.
 
 ## Status
 
-- **Phase:** 1–2 complete (design, core engine, transactional install/remove engine, CLI)
+- **Phase:** 1–2 complete (design, core engine, transactional install/remove engine, repo index search, CLI)
 - **Language:** Bash (uses `sqlite3` and `jq` as external tools — no compiled
   binary or language runtime required)
-- **Functional commands:** `list`, `info`, `install`, `remove`
-- **Stub commands:** `search` (deferred to Phase 4 repo tooling)
+- **Functional commands:** `list`, `info`, `install`, `remove`, `search`, `update`
+- **Stub commands:** none
 - **Not yet implemented:** dependency resolution (Phase 3), remote repository
-  tooling (Phase 4), daemon/launchd integration, GPG signing
+  hosting/publishing (Phase 4), daemon/launchd integration, GPG signing
 
 ---
 
@@ -30,7 +30,8 @@ parser/validator, and CLI command routing.
 | `ravpkg info <pkg>`      | **Functional** | Displays metadata and installed file paths for a package.                      | Phase 1 |
 | `ravpkg install <file>`  | **Functional** | Validates checksum, stages unpack, copies files, with transactional rollback. | Phase 2 |
 | `ravpkg remove <pkg>`    | **Functional** | Deletes tracked files and manifest, prunes directories, cleans DB record.     | Phase 2 |
-| `ravpkg search <query>`  | Stub           | Remote repository index query.                                               | Phase 4 |
+| `ravpkg search <query>`  | **Functional** | Case-insensitive substring query against cached repository index.             | Phase 2 |
+| `ravpkg update`          | **Functional** | Fetches and caches repository index from local mirror or remote URL.         | Phase 2 |
 
 > Dependency resolution and launchd/daemon service integration are deferred
 > to subsequent phases.
@@ -47,7 +48,10 @@ ravpkg/
 │   ├── db.sh                   # sqlite3 wrapper functions (init, add, remove, get, list)
 │   ├── parser.sh               # jq-based manifest parsing & schema validation functions
 │   ├── install.sh              # Filesystem installation engine with transactional rollback
-│   └── remove.sh               # Filesystem package removal and pruning engine
+│   ├── remove.sh               # Filesystem package removal and pruning engine
+│   └── repo.sh                 # Repository index caching and package search engine
+├── repo/
+│   └── generate-index.sh       # Tool to scan manifests and produce repository index JSON
 ├── schema/
 │   └── schema.sql               # SQLite table definitions (installed_packages)
 ├── tests/
@@ -59,9 +63,11 @@ ravpkg/
 │   ├── test_parser.bats         # bats tests for parser & validation rules
 │   ├── test_db.bats             # bats tests for SQLite CRUD operations
 │   ├── test_install_remove.bats # bats tests for install, rollback, and remove
+│   ├── test_search.bats         # bats tests for repository indexing & search
 │   └── run_tests.sh             # Standalone test runner (works with or without bats)
 ├── docs/
 │   ├── manifest-spec.md         # Formal specification for package manifest schema
+│   ├── repo-index-spec.md       # Formal specification for repository index schema
 │   ├── comparison.md            # Architectural comparison against dnf and yum
 │   └── benchmarks.md            # Benchmark measurements and methodology
 ├── install.sh                   # Installer script; checks sqlite3/jq, installs to /usr/local/bin
@@ -130,8 +136,16 @@ make test
 ./bin/ravpkg remove sample-package
 ./bin/ravpkg remove sample-package --root /opt/sandbox
 
-# Search repository (Phase 4 stub)
+# Update repository index (from remote URL or local mirror)
+./bin/ravpkg update
+./bin/ravpkg update --repo /path/to/index.json
+
+# Search repository packages (case-insensitive across name and description)
 ./bin/ravpkg search editor
+./bin/ravpkg search --repo /path/to/index.json term
+
+# Generate repository index from directory of manifests
+repo/generate-index.sh -o index.json /path/to/manifests
 ```
 
 Database path resolution order: `--db <path>` / `-d <path>` flag →

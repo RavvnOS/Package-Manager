@@ -98,7 +98,6 @@ rm -f "$CLI_DB"
 
 assert_ok "CLI --help displays help text" "$ROOT_DIR/bin/ravpkg" --help
 assert_ok "CLI list on empty database" "$ROOT_DIR/bin/ravpkg" --db "$CLI_DB" list
-assert_ok "CLI search stub" "$ROOT_DIR/bin/ravpkg" search query
 assert_fail "CLI info on non-existent package fails" "$ROOT_DIR/bin/ravpkg" --db "$CLI_DB" info notinstalled
 
 # Test CLI list and info with actual inserted package
@@ -263,6 +262,102 @@ else
 fi
 
 rm -rf "$IR_TMP"
+
+echo ""
+echo "--- Repository Indexing & Search Tests ---"
+SRCH_TMP="$(mktemp -d 2>/dev/null || mktemp -d -t 'ravpkg-srch')"
+SRCH_MANIFESTS="$SRCH_TMP/manifests"
+mkdir -p "$SRCH_MANIFESTS"
+
+# 1. Prepare sample manifests
+cat <<'EOF' > "$SRCH_MANIFESTS/editor.json"
+{
+  "name": "ravtext",
+  "version": "1.0.0",
+  "description": "Minimal text editor for ravynOS desktop",
+  "checksum": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "install_paths": [
+    { "source": "bin/ravtext", "destination": "/usr/local/bin/ravtext" }
+  ]
+}
+EOF
+
+cat <<'EOF' > "$SRCH_MANIFESTS/sysinfo.json"
+{
+  "name": "ravinfo",
+  "version": "2.0.0",
+  "description": "System hardware info inspection tool",
+  "checksum": "a94a8fe5ccb19ba61c4c0873d391e987982fbbd30002b80a1c1d044673898166",
+  "install_paths": [
+    { "source": "bin/ravinfo", "destination": "/usr/local/bin/ravinfo" }
+  ]
+}
+EOF
+
+cat <<'EOF' > "$SRCH_MANIFESTS/invalid.json"
+{
+  "version": "0.1.0",
+  "checksum": "1111111111111111111111111111111111111111111111111111111111111111"
+}
+EOF
+
+SRCH_INDEX="$SRCH_TMP/index.json"
+SRCH_CACHE="$SRCH_TMP/cache.json"
+
+# 1. Missing/uncached index produces clear error and non-zero exit
+assert_fail "search on missing/uncached index fails cleanly" "$ROOT_DIR/bin/ravpkg" --cache "$SRCH_TMP/missing.json" search "editor"
+
+# 2. Index generation from sample manifests
+assert_ok "repo/generate-index.sh generates index" "$ROOT_DIR/repo/generate-index.sh" -o "$SRCH_INDEX" "$SRCH_MANIFESTS"
+if [[ -f "$SRCH_INDEX" && "$(jq 'length' "$SRCH_INDEX" 2>/dev/null)" -eq 2 ]]; then
+    echo "  [PASS] index contains expected package count (skipping invalid manifests)"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] index generation failed or unexpected count"
+    FAILED=$((FAILED + 1))
+fi
+
+# 3. repo_fetch_index caching from local file
+source "$ROOT_DIR/lib/repo.sh"
+if repo_fetch_index "$SRCH_INDEX" "$SRCH_CACHE" && [[ -f "$SRCH_CACHE" ]]; then
+    echo "  [PASS] repo_fetch_index successfully cached local index"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] repo_fetch_index failed to cache index"
+    FAILED=$((FAILED + 1))
+fi
+
+# 4. Search by package name
+output="$("$ROOT_DIR/bin/ravpkg" --cache "$SRCH_CACHE" search "ravtext")"
+if [[ "$output" == *"ravtext"* && "$output" == *"1.0.0"* ]]; then
+    echo "  [PASS] search matches package name"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] search by package name failed"
+    FAILED=$((FAILED + 1))
+fi
+
+# 5. Search by description (case-insensitive)
+output="$("$ROOT_DIR/bin/ravpkg" --cache "$SRCH_CACHE" search "HARDWARE")"
+if [[ "$output" == *"ravinfo"* && "$output" == *"hardware info"* ]]; then
+    echo "  [PASS] search matches package description case-insensitively"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] case-insensitive description search failed"
+    FAILED=$((FAILED + 1))
+fi
+
+# 6. Search with no matches
+output="$("$ROOT_DIR/bin/ravpkg" --cache "$SRCH_CACHE" search "nonexistent")"
+if [[ "$output" == *"No packages found matching 'nonexistent'"* ]]; then
+    echo "  [PASS] search with no matches prints clean notice"
+    PASSED=$((PASSED + 1))
+else
+    echo "  [FAIL] search with no matches failed"
+    FAILED=$((FAILED + 1))
+fi
+
+rm -rf "$SRCH_TMP"
 
 echo ""
 echo "================================================================="
