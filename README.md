@@ -1,114 +1,192 @@
 <div align="center">
 
-# ravpkg
+<img src="https://img.shields.io/badge/-ravpkg-0A84FF?style=for-the-badge&logo=gnubash&logoColor=white" height="60" alt="ravpkg"/>
 
-**A minimal-viable package manager for ravynOS**
+### The package manager for ravynOS
 
+*A macOS-compatible, open-source operating system built on a Darwin/FreeBSD userland*
 
-![Shell](https://img.shields.io/badge/language-Bash-4EAA25?logo=gnu-bash&logoColor=white)
+<br/>
+
+![Shell](https://img.shields.io/badge/language-Bash%204%2B-4EAA25?logo=gnu-bash&logoColor=white)
 ![Status](https://img.shields.io/badge/status-Phase%201--3%20complete-brightgreen)
-![License](https://img.shields.io/badge/license-MIT-blue)
-![Tests](https://img.shields.io/badge/tests-passing-success)
+![Tests](https://img.shields.io/badge/tests-62%2B%20passing-success)
+![Dependencies](https://img.shields.io/badge/runtime%20deps-sqlite3%20%7C%20jq-blue)
+![License](https://img.shields.io/badge/license-MIT-lightgrey)
+![PRs](https://img.shields.io/badge/PRs-welcome-orange)
 
-[Overview](#overview) •
-[Features](#features) •
-[Installation](#installation) •
-[Usage](#usage) •
-[Architecture](#architecture) •
-[Documentation](#documentation) •
-[Roadmap](#roadmap)
+<br/>
+
+**[Quick Start](#-quick-start)** &nbsp;•&nbsp;
+**[Features](#-features)** &nbsp;•&nbsp;
+**[Why ravpkg](#-why-ravpkg)** &nbsp;•&nbsp;
+**[Architecture](#-architecture)** &nbsp;•&nbsp;
+**[Documentation](#-documentation)** &nbsp;•&nbsp;
+**[Roadmap](#-roadmap)**
 
 </div>
+
+<br/>
+
+---
+
+##  Table of Contents
+
+- [Overview](#overview)
+- [Why ravpkg](#-why-ravpkg)
+- [Features](#-features)
+- [Status](#-status)
+- [Quick Start](#-quick-start)
+- [Usage](#-usage)
+- [Architecture](#-architecture)
+- [ravpkg vs. dnf / yum](#-ravpkg-vs-dnf--yum)
+- [Documentation](#-documentation)
+- [Testing](#-testing)
+- [Security](#-security)
+- [Roadmap](#-roadmap)
+- [Contributing](#-contributing)
+- [License](#-license)
 
 ---
 
 ## Overview
 
 `ravpkg` handles package installation, removal, dependency resolution, and
-repository search for ravynOS — implemented entirely in pure Bash, with no
-compiler or language runtime dependency beyond a handful of standard Unix
-tools.
+repository search for **ravynOS** — implemented entirely in pure Bash, with
+no compiler or language runtime dependency beyond a handful of standard
+Unix tools (`bash`, `sqlite3`, `jq`).
 
-It draws architectural inspiration from `dnf`/`yum` and `pkg` (FreeBSD)
-while staying lightweight and fully transparent: every operation is plain
-shell script backed by SQLite and JSON, making the entire system easy to
-read, audit, and extend.
+It draws architectural inspiration from `dnf`/`yum` and FreeBSD's `pkg`
+while staying lightweight, dependency-free, and fully transparent: every
+operation is plain shell script backed by SQLite and JSON — auditable
+line-by-line by anyone, with no hidden binary state.
 
----
+<br/>
 
-## Features
+##  Why ravpkg
 
 | | |
 |---|---|
-|  **Package Installation** | Install from a local archive or by name from a repository index, with staged extraction and full transactional rollback on failure |
-|  **Integrity Verification** | SHA-256 checksum enforcement at every stage, plus optional GPG signature verification |
-|  **Dependency Resolution** | Semver-style constraint matching, circular dependency detection, `conflicts`/`provides` (virtual package) support |
-|  **Repository Search** | Case-insensitive search against a cached or remote package index |
-|  **Clean Removal** | Reverse-dependency warnings, safe file cleanup, empty-directory pruning |
-|  **Fully Tested** | Bats-based test suite covering parser, database, install/remove, search, and dependency resolution |
-|  **Zero Runtime Dependencies** | No compiler, no language runtime — just Bash, SQLite, and jq |
+| **Transparent by design** | No compiled binary, no opaque state — every install, removal, and resolution step is a readable shell function |
+| **Zero build step** | Clone it, `chmod +x`, run it. No compiler, no toolchain, no language runtime |
+| **Built for ravynOS's model** | Designed around App Bundle–style installs on a Darwin/FreeBSD userland, not a 1:1 port of a Linux-centric tool |
+| **Defense-in-depth integrity** | Checksums verified independently at download, index, and manifest level — never trusts a single source |
+| **Fails safe** | Every install is staged and fully rolled back on any failure — the filesystem is never left half-changed |
 
----
+<br/>
 
-## Status
+##  Features
+
+<table>
+<tr>
+<td width="33%" valign="top">
+
+** Installation**
+- Local archive or by-name repo install
+- Staged extraction
+- Full transactional rollback
+
+</td>
+<td width="33%" valign="top">
+
+** Dependencies**
+- Semver constraint matching
+- Circular dependency detection
+- Conflicts & virtual packages (`provides`)
+
+</td>
+<td width="33%" valign="top">
+
+** Integrity**
+- SHA-256 checksums, layered
+- Optional GPG signature verification
+- `--require-signature` enforcement mode
+
+</td>
+</tr>
+<tr>
+<td width="33%" valign="top">
+
+** Repository**
+- Case-insensitive search
+- Index caching
+- `--no-cache` for fresh fetch
+
+</td>
+<td width="33%" valign="top">
+
+** Removal**
+- Reverse-dependency warnings
+- Safe, tolerant file cleanup
+- Empty-directory pruning
+
+</td>
+<td width="33%" valign="top">
+
+** Quality**
+- 62+ passing Bats tests
+- Benchmarked performance
+- No silent failures (`set -euo pipefail`)
+
+</td>
+</tr>
+</table>
+
+<br/>
+
+##  Status
 
 **Phase 1–3 complete.**
 
 | Command | Status | Description |
-|---|---|---|
-| `ravpkg list` | ✅ Functional | List all installed packages |
-| `ravpkg info <pkg>` | ✅ Functional | Show metadata and installed files for a package |
-| `ravpkg install <file>` | ✅ Functional | Install from a local `.rav` archive |
-| `ravpkg install <name>` | ✅ Functional | Resolve and install by name from a repository index |
-| `ravpkg remove <pkg>` | ✅ Functional | Remove an installed package |
-| `ravpkg search <query>` | ✅ Functional | Search the repository index |
+|---|:---:|---|
+| `ravpkg list` | ✅ | List all installed packages |
+| `ravpkg info <pkg>` | ✅ | Show metadata and installed files |
+| `ravpkg install <file>` | ✅ | Install from a local `.rav` archive |
+| `ravpkg install <name>` | ✅ | Resolve and install by name from a repository |
+| `ravpkg remove <pkg>` | ✅ | Remove an installed package |
+| `ravpkg search <query>` | ✅ | Search the repository index |
 
-**In progress:** automatic recursive dependency fetching with full
-transaction planning (design finalized, implementation pending).
+>  **In progress:** automatic recursive dependency fetching with full
+> transaction planning (design finalized, implementation pending).
+>
+>  **Deferred:** full SAT-style alternative dependencies (`A | B`),
+> launchd/daemon integration — see [Roadmap](#-roadmap).
 
-**Out of scope (for now):** full SAT-style alternative dependencies
-(`A | B`), launchd/daemon integration — see [Roadmap](#roadmap) for details.
+<br/>
 
----
+##  Quick Start
 
-## Installation
+```bash
+# Clone
+git clone https://github.com/<org>/Package-Manager.git ravpkg && cd ravpkg
 
-### Prerequisites
+# Install
+./install.sh
+
+# Verify
+ravpkg --help
+```
+
+**Prerequisites**
 
 | Tool | Required | Purpose |
-|---|---|---|
-| `bash` (v4+) | Yes | Runtime |
-| `sqlite3` | Yes | Local package database |
-| `jq` | Yes | Manifest and index parsing |
-| `curl` or `wget` | For remote installs | Package download |
-| `gpg` | Optional | Signature verification |
+|---|:---:|---|
+| `bash` (v4+) | ✅ | Runtime |
+| `sqlite3` | ✅ | Local package database |
+| `jq` | ✅ | Manifest & index parsing |
+| `curl` / `wget` | for remote installs | Package download |
+| `gpg` | optional | Signature verification |
 
-### Install
+<br/>
 
-```bash
-git clone https://github.com/<org>/Package-Manager.git ravpkg
-cd ravpkg
-./install.sh
-```
-
-Or using Make:
-
-```bash
-make install
-```
-
-This installs `ravpkg` to `${PREFIX:-/usr/local}/bin` and supporting
-libraries to `${PREFIX:-/usr/local}/lib/ravpkg`.
-
----
-
-## Usage
+##  Usage
 
 ```bash
 # List installed packages
 ravpkg list
 
-# View package details
+# Inspect a package
 ravpkg info ravterm
 
 # Install from a local archive
@@ -126,6 +204,7 @@ ravpkg remove webapp
 
 <details>
 <summary><strong>Full flag reference</strong></summary>
+<br/>
 
 | Flag | Description |
 |---|---|
@@ -138,30 +217,31 @@ ravpkg remove webapp
 
 </details>
 
-Database path resolution order: `--db` flag → `$RAVPKG_DB` environment
-variable → `/var/db/ravpkg/pkg.db` → `./ravpkg.db`.
+Database path resolution order: `--db` flag → `$RAVPKG_DB` env variable →
+`/var/db/ravpkg/pkg.db` → `./ravpkg.db`.
 
----
+<br/>
 
-## Architecture
+## 🏗️ Architecture
 
 ```
 ravpkg/
-├── bin/ravpkg            # CLI entrypoint & command dispatch
+├── bin/ravpkg               CLI entrypoint & command dispatch
 ├── lib/
-│   ├── db.sh              # SQLite CRUD (parameter-bound queries)
-│   ├── parser.sh           # Manifest parsing & schema validation
-│   ├── install.sh          # Staged extraction, checksum checks, rollback
-│   ├── remove.sh           # Safe removal, dependent warnings
-│   ├── deps.sh              # Dependency resolution & cycle detection
-│   └── repo.sh              # Repository index fetch, cache, search
-├── repo/generate-index.sh  # Builds a repository index from manifests
-├── schema/schema.sql         # SQLite table definitions
-├── docs/                     # Specifications and reports
-└── tests/                    # Bats test suite + benchmarks
+│   ├── db.sh                 SQLite CRUD (parameter-bound queries)
+│   ├── parser.sh               Manifest parsing & schema validation
+│   ├── install.sh               Staged extraction, checksum checks, rollback
+│   ├── remove.sh                 Safe removal, dependent warnings
+│   ├── deps.sh                    Dependency resolution & cycle detection
+│   └── repo.sh                     Repository index fetch, cache, search
+├── repo/generate-index.sh      Builds a repository index from manifests
+├── schema/schema.sql             SQLite table definitions
+├── docs/                           Specifications and reports
+└── tests/                           Bats test suite + benchmarks
 ```
 
-**Design principles:**
+**Design principles**
+
 - **Transparency over speed** — plain shell and SQLite text queries, easy
   to read and audit, at the cost of process-spawn overhead versus a
   compiled implementation
@@ -169,11 +249,26 @@ ravpkg/
   is staged and rolled back on any failure before touching the real
   filesystem
 - **Defense in depth** — checksum verification is layered independently at
-  the download, index, and manifest level, and never trusts a single source
+  the download, index, and manifest level
 
----
+<br/>
 
-## Documentation
+## ⚖️ ravpkg vs. dnf / yum
+
+| | ravpkg | dnf / yum |
+|---|---|---|
+| **Language** | Bash | Python / C (libdnf) |
+| **Local DB** | SQLite (via CLI) | rpmdb (Berkeley DB / SQLite / ndb) |
+| **Package format** | JSON manifest + archive | Binary RPM header |
+| **Dependency solver** | Constraint matching + cycle detection | Full SAT solver (libsolv) |
+| **Startup overhead** | Low — no interpreter | Higher — Python/libdnf init |
+| **Maturity** | New, actively developed | Decades of production use |
+
+Full breakdown in [`docs/comparison.md`](docs/comparison.md).
+
+<br/>
+
+##  Documentation
 
 | Document | Description |
 |---|---|
@@ -182,49 +277,52 @@ ravpkg/
 | [`docs/comparison.md`](docs/comparison.md) | Architectural comparison against `dnf`/`yum` |
 | [`docs/benchmarks.md`](docs/benchmarks.md) | Measured performance results and methodology |
 
----
+<br/>
 
-## Testing
+##  Testing
 
 ```bash
-# With bats installed
-bats tests/
-
-# Without bats
-./tests/run_tests.sh
-
-# Run benchmarks
-./tests/benchmark.sh
+bats tests/              # full suite, if bats is installed
+./tests/run_tests.sh     # standalone fallback runner
+./tests/benchmark.sh     # performance benchmarks
 ```
 
-Test coverage includes manifest validation, database CRUD, transactional
+Coverage includes manifest validation, database CRUD, transactional
 install/remove with rollback, repository search and caching, dependency
 resolution (chains, diamonds, cycles), and checksum/signature verification.
 
----
+<br/>
 
-## Roadmap
+##  Security
+
+- Parameter-bound SQLite queries prevent injection from manifest field values
+- Checksums verified **before** any payload is extracted to disk
+- Optional GPG signature verification for an additional trust layer
+- Every install is staged and fully rolled back on failure — no partial installs
+
+<br/>
+
+##  Roadmap
 
 - [ ] Automatic recursive dependency fetching with full transaction planning
 - [ ] Full SAT-style alternative dependencies (`A | B`)
-- [ ] launchd/daemon integration *(blocked — ravynOS's own launchd port is unfinished upstream)*
+- [ ] launchd/daemon integration *(blocked — ravynOS's launchd port is unfinished upstream)*
 
----
+<br/>
 
-## Security
-
-- Parameter-bound SQLite queries prevent injection from manifest field values
-- Checksum verification occurs before any payload is extracted to disk
-- Optional GPG signature verification for an additional trust layer
-- All installs are staged and fully rolled back on failure — no partial installs
-
----
-
-## Contributing
+##  Contributing
 
 Issues and pull requests are welcome. Please ensure `make test` passes
 before submitting a PR.
 
-## License
+## 📄 License
 
 MIT
+
+<br/>
+
+<div align="center">
+
+Built for **ravynOS** 🐦‍⬛
+
+</div>
