@@ -2,7 +2,7 @@
 
 <img src="https://img.shields.io/badge/-ravpkg-0A84FF?style=for-the-badge&logo=gnubash&logoColor=white" height="60" alt="ravpkg"/>
 
-### The package manager for ravynOS
+### The package manager for RavvnOS
 
 *A macOS-compatible, open-source operating system built on a Darwin/FreeBSD userland*
 
