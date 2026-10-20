@@ -258,6 +258,7 @@ Full breakdown in [`docs/comparison.md`](docs/comparison.md).
 | [`docs/repo-index-spec.md`](docs/repo-index-spec.md) | Repository index schema |
 | [`docs/comparison.md`](docs/comparison.md) | Architectural comparison against `dnf`/`yum` |
 | [`docs/benchmarks.md`](docs/benchmarks.md) | Measured performance results and methodology |
+| [`docs/benchmark_analysis.md`](docs/benchmark_analysis.md) | In-depth observations and architectural comparison with `apt`, `yum`, and `dnf` |
 
 <br/>
 

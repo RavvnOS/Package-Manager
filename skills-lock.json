@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "shell-scripting": {
+      "source": "abhijit-without-h/shell-scripting-skill",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "b5e27eb2c14b3a2c84c1c8c05f743a9bf088e1bd61a54dc343ffc96904bb9d7c"
+    },
+    "stop-slop": {
+      "source": "hardikpandya/stop-slop",
+      "sourceType": "github",
+      "skillPath": "SKILL.md",
+      "computedHash": "617bf97d33162a6bd0da4f40a97aac589de58e5a6c9cf011ed6108992210e7cb"
+    }
+  }
+}

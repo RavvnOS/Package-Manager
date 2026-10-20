@@ -540,14 +540,14 @@ case "$COMMAND" in
 
             if [[ "${RAVPKG_SKIP_VERIFY:-0}" != "1" ]]; then
                 if ! repo_verify_checksum "$TMP_TARGET" "$target_idx_cs"; then
-                    echo "Error: checksum mismatch between downloaded target package '$target_name' and index!" >&2
+                    echo "Error: checksum mismatch between downloaded package and repository index for '$target_name'!" >&2
                     rm -f "$TMP_TARGET" "${TMP_TARGET}.sig"
                     _rollback_transaction "$target_name"
                     exit 1
                 fi
                 target_manifest_cs="$(tar -xf "$TMP_TARGET" -O manifest.json 2>/dev/null | jq -r '.checksum // empty' 2>/dev/null | tr -d '\r' || true)"
                 if [[ -n "$target_manifest_cs" && -n "$target_idx_cs" && "$target_manifest_cs" != "$target_idx_cs" ]]; then
-                    echo "Error: checksum disagreement between index and manifest for target package '$target_name'!" >&2
+                    echo "Error: checksum disagreement between repository index and package manifest for '$target_name'!" >&2
                     rm -f "$TMP_TARGET" "${TMP_TARGET}.sig"
                     _rollback_transaction "$target_name"
                     exit 1

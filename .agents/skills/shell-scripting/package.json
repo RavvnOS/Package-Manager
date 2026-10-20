@@ -1,0 +1,46 @@
+{
+  "name": "@abhijit-without-h/shell-scripting-skill",
+  "version": "1.0.0",
+  "description": "Production-grade shell scripting skill for Claude Code covering bash, zsh, and POSIX sh with safety patterns, testing, and operational best practices",
+  "keywords": [
+    "claude-code",
+    "claude-skill",
+    "shell",
+    "bash",
+    "zsh",
+    "scripting",
+    "devops",
+    "automation",
+    "posix",
+    "safety",
+    "testing"
+  ],
+  "author": "Abhijit S R",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Abhijit-without-h/Shell-Scripting-skill.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Abhijit-without-h/Shell-Scripting-skill/issues"
+  },
+  "homepage": "https://github.com/Abhijit-without-h/Shell-Scripting-skill#readme",
+  "main": "SKILL.md",
+  "files": [
+    "SKILL.md",
+    "README.md",
+    "LICENSE",
+    "references/",
+    ".claude-plugin/"
+  ],
+  "scripts": {
+    "validate": "node scripts/validate.js",
+    "install": "node scripts/install.js"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

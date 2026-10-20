@@ -1,0 +1,32 @@
+{
+  "metadata": {
+    "pluginRoot": "."
+  },
+  "plugins": [
+    {
+      "name": "shell-scripting",
+      "displayName": "Shell Scripting Expert",
+      "version": "1.0.0",
+      "description": "Production-grade shell scripting for bash, zsh, and POSIX sh with safety patterns, testing, and operational best practices",
+      "author": "Abhijit-without-h",
+      "repository": "https://github.com/Abhijit-without-h/Shell-Scripting-skill",
+      "source": ".",
+      "skills": [
+        "./SKILL.md"
+      ],
+      "tags": [
+        "bash",
+        "zsh",
+        "shell",
+        "scripting",
+        "devops",
+        "automation",
+        "safety",
+        "testing",
+        "posix"
+      ],
+      "category": "development",
+      "license": "MIT"
+    }
+  ]
+}

@@ -18,6 +18,7 @@ semver_compare() {
     read -r -a a <<< "$v1"
     read -r -a b <<< "$v2"
 
+    local i
     local max=$(( ${#a[@]} > ${#b[@]} ? ${#a[@]} : ${#b[@]} ))
     for ((i=0; i<max; i++)); do
         local p1="${a[i]:-0}"
@@ -592,8 +593,19 @@ deps_build_install_plan() {
             # 4. Search repository index for highest satisfying version (exact name or provides)
             local cand_entry
             if ! cand_entry="$(_find_highest_satisfying_candidate "$index_cache" "$dep_name" "$dep_constraint")"; then
-                echo "Error: cannot resolve dependency '$dep_name' (constraint: $dep_constraint) required by '$current_pkg'." >&2
-                echo "No satisfying package version found in repository index." >&2
+                echo "Error: cannot install '$current_pkg' due to unsatisfied dependencies: cannot resolve dependency '$dep_name' (constraint: $dep_constraint)." >&2
+                echo "  - $dep_name (missing)" >&2
+                local rem_d
+                for ((rem_d=d+1; rem_d<deps_count; rem_d++)); do
+                    local rem_name rem_cs
+                    rem_name="$(echo "$manifest_json" | jq -r ".dependencies[$rem_d].name" | tr -d '\r')"
+                    rem_cs="$(echo "$manifest_json" | jq -r ".dependencies[$rem_d].constraint // \"*\"" | tr -d '\r')"
+                    if ! _find_installed_provider "$db_path" "$rem_name" "$root_prefix" >/dev/null 2>&1; then
+                        if ! _find_highest_satisfying_candidate "$index_cache" "$rem_name" "$rem_cs" >/dev/null 2>&1; then
+                            echo "  - $rem_name (missing)" >&2
+                        fi
+                    fi
+                done
                 return 1
             fi
 

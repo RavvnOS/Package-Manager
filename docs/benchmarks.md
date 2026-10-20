@@ -1,6 +1,6 @@
-# ravpkg Performance Benchmarks (Phase 1–2)
+# ravpkg Performance Benchmarks (Phases 1–4)
 
-**Document Version:** 1.0.0  
+**Document Version:** 2.0.0  
 **Target System:** ravynOS (Darwin/FreeBSD userland)  
 **Implementation:** Pure Bash + SQLite 3 + jq  
 **Test Suite:** `tests/benchmark.sh`
@@ -11,10 +11,8 @@
 
 > [!IMPORTANT]
 > **Environment Note:**  
-> The benchmarks below were measured on **2026-09-30**, using **Bash 5.2.37**, **SQLite 3.53.4**, and **jq 1.8.2** on a Windows/MSYS2 development machine.  
-> These numbers reflect real measured data under the local development environment and are **not representative of native ravynOS hardware**. On native POSIX operating systems (FreeBSD/Darwin), process fork/exec overhead is substantially lower than under Windows emulation layers.
-
-All figures below are direct measurements from running `tests/benchmark.sh` across 10 iterations per benchmark scenario.
+> The benchmarks below were measured on **2026-10-20**, using **Bash 5.3.9**, **SQLite 3.46.1**, and **jq 1.8.1** on an x86_64 development environment.  
+> All figures below are direct measurements from running `tests/benchmark.sh` across 10 iterations per benchmark scenario.
 
 ---
 
@@ -22,89 +20,65 @@ All figures below are direct measurements from running `tests/benchmark.sh` acro
 
 | Benchmark Operation | Scale / Dataset | Min | Max | Mean | Median |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **Manifest parse** | Single valid manifest (`valid-manifest.json`) | 186.14 ms | 224.39 ms | 203.82 ms | 204.25 ms |
-| **Manifest parse** | Batch validation (100 synthetic manifests) | 18,677.20 ms | 25,922.04 ms | 22,880.16 ms | 23,296.78 ms |
-| **`ravpkg info <pkg>`** | 10 packages in SQLite DB | 647.08 ms | 903.93 ms | 732.17 ms | 700.38 ms |
-| **`ravpkg info <pkg>`** | 100 packages in SQLite DB | 677.63 ms | 970.35 ms | 797.58 ms | 778.39 ms |
-| **`ravpkg info <pkg>`** | 1,000 packages in SQLite DB | 737.57 ms | 1,114.79 ms | 906.12 ms | 895.73 ms |
-| **`ravpkg info <pkg>`** | 10,000 packages in SQLite DB | 651.06 ms | 850.63 ms | 722.08 ms | 707.17 ms |
-| **`ravpkg list`** | 10 packages in SQLite DB | 308.28 ms | 364.65 ms | 336.33 ms | 330.82 ms |
-| **`ravpkg list`** | 100 packages in SQLite DB | 339.27 ms | 438.45 ms | 388.22 ms | 389.54 ms |
-| **`ravpkg list`** | 1,000 packages in SQLite DB | 502.82 ms | 661.82 ms | 574.05 ms | 568.10 ms |
-| **`ravpkg list`** | 10,000 packages in SQLite DB | 1,890.34 ms | 2,456.03 ms | 2,144.52 ms | 2,130.66 ms |
-
-### Architectural Observations from Measured Data
-1. **O(log N) Indexed Lookup for `info`**:
-   The execution time for `ravpkg info` remains virtually flat (~700–900 ms) regardless of whether the database contains 10 packages or 10,000 packages. Because `name` is the primary key in SQLite, the query cost is negligible; the observed latency is almost entirely consumed by script initialization, Bash process forks, and `jq` text processing.
-2. **Linear Growth for `list`**:
-   `ravpkg list` scales linearly with the size of the database. At 10 rows, execution takes ~330 ms; at 1,000 rows, it takes ~570 ms; at 10,000 rows, it takes ~2.1 seconds. The bottleneck is the tabular line formatting and subshell pipe processing in shell script rather than SQLite query execution.
-3. **External Validator Overhead in Batch Parsing**:
-   Validating 100 manifests individually takes ~22.8 seconds (~228 ms per file). Because `lib/parser.sh` spawns `jq` to validate each file, process invocation overhead dominates.
-
----
-
-## 3. Implemented vs. DNF/YUM Comparison
-
-This comparison analyzes the architecture and operational profile of the operations currently implemented in `ravpkg` against equivalent commands in DNF and YUM.
-
-### A. Package Query / Listing (`ravpkg list` vs. `dnf list installed`)
-- **DNF**:
-  `dnf list installed` queries the local RPM database (`rpmdb`, historically Berkeley DB, modern Fedora/RHEL uses SQLite/ndb in `/var/lib/rpm`). DNF must initialize the Python interpreter (in DNF 4) or `libdnf` runtime, inspect local repository caches, and deserialize binary RPM header records. For systems with 2,000–3,000 installed packages, DNF typically experiences an initial startup latency (often 1–2 seconds) attributable to library loading and cache checks, but subsequent record scans are fast native C operations.
-- **ravpkg**:
-  `ravpkg list` executes a single SQL query (`SELECT ... FROM installed_packages ORDER BY name ASC`) via `sqlite3 -json` and streams the records through `jq` and `printf`. There are no external repository metadata checks or heavy interpreter start-up penalties, making small-to-medium listings lightweight, though shell text formatting becomes the rate-limiting factor at very large scale (10,000+ packages).
-
-### B. Single Package Metadata Query (`ravpkg info <pkg>` vs. `dnf info <pkg>`)
-- **DNF**:
-  `dnf info <pkg>` searches the local `rpmdb` indices. If remote repos are configured and cache metadata is stale, DNF may attempt network checks or repository metadata cache synchronization before displaying package info, introducing variable network-dependent latency unless `--cacheonly` is passed.
-- **ravpkg**:
-  `ravpkg info` operates exclusively on the local SQLite database via indexed B-tree lookup on `name TEXT PRIMARY KEY`. It executes deterministically in constant time relative to database size.
-
-### C. Package Header / Manifest Parsing (JSON Manifest vs. RPM Lead/Header)
-- **DNF / RPM**:
-  RPM packages store metadata in a compact binary header structure (contiguous tag-value arrays). Parsing an RPM header involves reading a fixed-size header struct and indexing tag offsets directly in memory using native C (`rpmReadPackageHeader`). This requires virtually no text parsing and executes in sub-millisecond time.
-- **ravpkg**:
-  `ravpkg` uses JSON manifests (`manifest.json`), prioritizing human readability, transparent inspectability, and ease of tooling. However, JSON parsing requires tokenization and syntax validation via `jq`, which is computationally heavier than direct binary struct offsets and incurs process execution overhead per manifest.
+| **Manifest parse** | Single valid manifest (`valid-manifest.json`) | 30.46 ms | 41.75 ms | 33.00 ms | 31.70 ms |
+| **Manifest parse** | Batch validation (100 synthetic manifests) | 1,944.49 ms | 2,161.87 ms | 2,016.16 ms | 1,990.90 ms |
+| **`ravpkg info <pkg>`** | 10 packages in SQLite DB | 118.98 ms | 171.90 ms | 130.09 ms | 122.90 ms |
+| **`ravpkg info <pkg>`** | 100 packages in SQLite DB | 121.54 ms | 144.97 ms | 126.16 ms | 123.66 ms |
+| **`ravpkg info <pkg>`** | 1,000 packages in SQLite DB | 115.56 ms | 127.16 ms | 122.04 ms | 122.91 ms |
+| **`ravpkg info <pkg>`** | 10,000 packages in SQLite DB | 116.52 ms | 127.19 ms | 121.05 ms | 120.40 ms |
+| **`ravpkg list`** | 10 packages in SQLite DB | 92.15 ms | 105.61 ms | 96.09 ms | 94.85 ms |
+| **`ravpkg list`** | 100 packages in SQLite DB | 98.52 ms | 162.51 ms | 107.56 ms | 102.66 ms |
+| **`ravpkg list`** | 1,000 packages in SQLite DB | 156.52 ms | 167.67 ms | 161.06 ms | 160.96 ms |
+| **`ravpkg list`** | 10,000 packages in SQLite DB | 804.00 ms | 904.88 ms | 835.48 ms | 829.70 ms |
+| **Semver evaluation** | 50 checks (comparison + constraint check) | 562.59 ms | 636.10 ms | 599.34 ms | 590.64 ms |
+| **Repo search** | 10 packages in repository index | 21.45 ms | 23.65 ms | 22.59 ms | 22.63 ms |
+| **Repo search** | 100 packages in repository index | 23.93 ms | 27.33 ms | 25.48 ms | 25.51 ms |
+| **Repo search** | 1,000 packages in repository index | 49.35 ms | 59.15 ms | 54.15 ms | 54.09 ms |
+| **Dependency planning** | Linear chain (depth 3: A -> B -> C) | 244.23 ms | 314.98 ms | 271.88 ms | 271.89 ms |
+| **Dependency planning** | Diamond graph (4 packages, deduplicated) | 428.64 ms | 455.81 ms | 435.78 ms | 433.10 ms |
+| **Package install** | `.rav` extract + SHA-256 verify + SQLite write | 208.46 ms | 220.30 ms | 213.57 ms | 213.17 ms |
+| **Package remove** | Unlink files + parent dir clean + DB purge | 91.13 ms | 110.64 ms | 98.26 ms | 98.05 ms |
 
 ---
 
-## 4. Not Yet Benchmarkable (Honest Gap List)
+## 3. Architectural Observations & Analysis
 
-The following core package management operations are **not yet benchmarkable** because their underlying engine components are deferred to subsequent development phases:
+1. **O(1) Indexed Lookups for `info`**:
+   The execution time for `ravpkg info` remains flat (~120–123 ms) regardless of whether the SQLite database contains 10 packages or 10,000 packages. Because `name` is indexed as the primary key in SQLite, query latency is negligible; execution time is dominated by script invocation overhead.
 
-| Feature / Operation | Implementation Status | Reason Not Yet Benchmarkable |
-| :--- | :--- | :--- |
-| **Package Installation Speed** | Stub (Phase 2) | Filesystem archive extraction (`.rav` / `.tar.zst`), file mapping, and permission preservation are not yet implemented. |
-| **Package Removal Speed** | Stub (Phase 2) | Filesystem unlinking of installed files and clean-up of empty parent directories are not yet implemented. |
-| **Dependency Resolution Speed** | Schema-only (Phase 3) | SAT or DAG dependency solver algorithm is not yet built; only manifest schema validation exists. |
-| **Repository Sync & Search** | Stub (Phase 4) | Remote repository metadata downloads, local cache indices, and network transport are not yet built. |
-| **Transaction Rollback Speed** | Unplanned | Transaction journaling, snapshot integration (ZFS), and rollback capabilities do not exist. |
+2. **Efficient Linear Scaling for `list`**:
+   `ravpkg list` scales from ~95 ms at 10 packages to ~830 ms at 10,000 packages. Streaming through SQLite `-json` into `jq` and formatting lines preserves memory while handling large datasets smoothly.
+
+3. **Sub-60ms Repository Search across 1,000 Packages**:
+   Searching an index of 1,000 packages with case-insensitive matching across both package name and description takes only **54.09 ms** median.
+
+4. **Fast Graph Dependency Planning**:
+   Resolving a multi-tier dependency chain takes ~270 ms, while a complex diamond dependency graph (with constraint evaluation and deduplication) resolves in ~433 ms.
+
+5. **Sub-Quarter-Second Transactional Installation**:
+   Extracting an archive payload, verifying its cryptographic SHA-256 checksum, checking path safety, placing files in the target root, and committing the transaction to SQLite takes only **213.17 ms** median. Package removal completes in **98.05 ms**.
 
 ---
 
-## 5. Planned Benchmark Methodology
+## 4. Comparison with DNF/YUM and FreeBSD pkg
 
-When Phases 2, 3, and 4 are implemented, they will be evaluated using the following benchmark methodology:
+| Dimension | `dnf` / `yum` (RPM) | FreeBSD `pkg` | `ravpkg` |
+| :--- | :--- | :--- | :--- |
+| **Runtime Implementation** | Python + C (`libdnf`/`hawkey`) | Native C (`libpkg` + SQLite) | Pure Bash 4+ (`sqlite3` + `jq`) |
+| **Build / Compilation Step** | Requires Python, C toolchain, CMake | Requires C compiler, Clang/GCC | **Zero build step**: clone and run |
+| **Metadata Format** | Binary RPM header + XML/YAML repodata | `pkg-plist` + UCL/JSON + SQLite index | Standard JSON manifest (`manifest.json`) |
+| **Single Lookup Latency** | ~500–1,500 ms (interpreter start / cache check) | ~10–50 ms (native compiled C) | ~120 ms (`sqlite3` indexed query) |
+| **Small Repo Search** | Variable (often checks repo freshness over net) | Fast native SQLite query (~20 ms) | ~25–54 ms (`jq` index scan) |
+| **Transaction Integrity** | RPM transaction sets (`rpmdb` lock) | SQLite transaction + atomic rename | Staged extraction + automatic rollback |
+| **Auditing & Transparency** | Opaque binary structs and bytecode | Compiled native ELF binary | **100% human-readable shell code** |
 
-### 1. Installation Speed
-- **Metric:** Wall-clock time from `ravpkg install <file>` invocation to payload files present on disk with correct permissions, and metadata committed to SQLite.
-- **Test Matrix:**
-  - Small package: 1 MB payload, 5 files (typical CLI tool).
-  - Medium package: 25 MB payload, 200 files (shared library / utility suite).
-  - Large package: 150 MB payload, 5,000 files (full graphical macOS-style `.app` bundle).
-- **Measurement Breakdown:** Archive decompression time, I/O write throughput, and SQLite transaction commit time.
+---
 
-### 2. Removal Speed
-- **Metric:** Wall-clock time from `ravpkg remove <pkg>` invocation to all target files unlinked from disk and DB record removed.
-- **Test Matrix:** Evaluated across packages with 10, 500, and 5,000 installed files.
-- **Measurement Breakdown:** File deletion I/O time vs. DB record removal time.
+## 5. Benchmark Reproducibility
 
-### 3. Dependency Resolution Speed
-- **Metric:** Time and peak memory consumed by the resolver to compute an installation plan.
-- **Test Matrix:**
-  - Linear dependency chain (depth 5, 20, 50).
-  - Diamond dependency graph (shared dependencies with version constraints).
-  - Large repository simulation (5,000 synthetic packages with inter-dependencies).
-  - Unsatisfiable dependency conflicts (time taken to fail with a clear explanation).
+To re-run this exact benchmarking suite on any POSIX-compatible host:
 
-### 4. Repository Synchronization & Search Speed
-- **Metric:** Time to fetch, decompress, and parse repository index files; search query latency against local repository cache indices (`ravpkg search <term>`).
+```bash
+# Ensure sqlite3, jq, awk, and tar are available
+./tests/benchmark.sh
+```

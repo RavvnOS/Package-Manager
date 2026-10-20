@@ -194,6 +194,20 @@ pkg_install() {
     pkg_version="$(manifest_get_version "$manifest_json" | tr -d '\r')"
     expected_checksum="$(manifest_get_checksum "$manifest_json" | tr -d '\r')"
 
+    # 2.2 Validate install_paths for path traversal forbidden patterns early
+    local mappings_count
+    mappings_count="$(echo "$manifest_json" | jq '.install_paths | length' 2>/dev/null || echo 0)"
+    local chk_i
+    for ((chk_i=0; chk_i<mappings_count; chk_i++)); do
+        local dest_chk
+        dest_chk="$(echo "$manifest_json" | jq -r ".install_paths[$chk_i].destination" | tr -d '\r')"
+        if ! _validate_destination_path "$dest_chk"; then
+            rm -rf "$STAGE_DIR"
+            trap - ERR
+            return 1
+        fi
+    done
+
     # 3. Check if package is already installed
     if existing_pkg="$(db_get_package "$db_path" "$pkg_name" 2>/dev/null)"; then
         local existing_ver
