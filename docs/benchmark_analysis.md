@@ -11,7 +11,7 @@
 
 ## 1. Executive Summary
 
-`ravpkg` is the native package manager for **ravynOS**, an open-source operating system providing macOS desktop and application compatibility on top of a Darwin/FreeBSD userland. Unlike traditional Linux package managers (`apt`, `yum`, `dnf`) that rely on compiled C/C++ libraries (`libapt-pkg`, `libsolv`) or heavy Python runtimes, `ravpkg` is built entirely in **pure Bash**, backed by an embedded **SQLite 3** relational database and **jq** for JSON manipulation.
+`ravpkg` is the native package manager for **ravvnOS**, an open-source operating system providing macOS desktop and application compatibility on top of a Darwin/FreeBSD userland. Unlike traditional Linux package managers (`apt`, `yum`, `dnf`) that rely on compiled C/C++ libraries (`libapt-pkg`, `libsolv`) or heavy Python runtimes, `ravpkg` is built entirely in **pure Bash**, backed by an embedded **SQLite 3** relational database and **jq** for JSON manipulation.
 
 This report documents:
 
